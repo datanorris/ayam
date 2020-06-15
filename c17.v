@@ -15,88 +15,300 @@ acquire operation on A. “Relaxed” atomic operations are not synchronization 
 synchronization operations, they cannot contribute to data races. — end note ]
 *)
 
-Require Import List.
-Require Import RelationClasses.
+Require Import List Program RelationClasses.
 From hahn Require Import Hahn.
 
 Inductive Mode := 
-| pln
-| rlx
-| cns
-| acq
-| rel
-| acqrel
-| sc.
+| mPln
+| mRlx
+| mCns
+| mAcq
+| mRel
+| mAcqRel
+| mSc.
 
 Definition Loc := nat.
 
-Inductive Op :=
-| write (m: {m: Mode | In m (pln::rlx::rel::acqrel::sc::nil)}) (l: Loc)
-| read (m: {m: Mode | In m (pln::rlx::cns::acq::acqrel::sc::nil)}) (from: Op)
-| fence (m: {m: Mode | In m (acq::rel::acqrel::sc::nil)})
-| rmw (m: {m: Mode | In m (acq::rel::acqrel::sc::nil)}) (from: Op).
+(* What about memory locations vs. atomic/non-atomic objects *)
 
-Definition IsRead (o: Op) :=
+Inductive Op' :=
+| write (m: Mode | In m [mPln;mRlx;mRel;mAcqRel;mSc]) (l: Loc)
+| read (m: Mode | In m [mPln;mRlx;mCns;mAcq;mAcqRel;mSc]) (from: Op')
+| fence (m: Mode | In m [mAcq;mRel;mAcqRel;mSc])
+| rmw (m: Mode | In m [mAcq;mRel;mAcqRel;mSc]) (from: Op').
+
+Definition IsRead' (o: Op') :=
   match o with
     read _ _
   | rmw _ _ => true
   | _ => false
   end.
-Definition IsWrite (o: Op) :=
+Definition IsWrite' (o: Op') :=
   match o with
     write _ _
   | rmw _ _ => true
   | _ => false
   end.
-Definition IsFence (o: Op) :=
+Definition IsFence' (o: Op') :=
   match o with
     fence _ => true
   | _ => false
   end.
-Definition IsRMW (o: Op) :=
+Definition IsRMW' (o: Op') :=
   match o with
     rmw _ _ => true
   | _ => false
   end.
 
+Program Definition from' (o: Op' | IsRead' o) :=
+  match `o as o'
+    return IsRead' o' -> Op'
+  with
+    write _ _
+  | fence _ => _
+  | read _ f
+  | rmw _ f => fun _ => f
+  end (proj2_sig o).
+
+Conjecture events': Op' -> Prop.
+Conjecture events'_finite: set_finite events'.
+
+Program Fixpoint OP_WF (o: Op'): Prop :=
+  ⟪ op_event: events' o ⟫ /\
+  ⟪ op_reads_from_write: forall s: IsRead' o, IsWrite' (from' o) ⟫ /\
+  ⟪ op_from_wf: forall s: IsRead' o, OP_WF (from' o) ⟫.
+
+Definition Op := { o: Op' | OP_WF o }.
+
+Definition IsRead (o: Op) := IsRead' (`o).
+Definition IsWrite (o: Op) := IsWrite' (`o).
+Definition IsFence (o: Op) := IsFence' (`o).
+Definition IsRMW (o: Op) := IsRMW' (`o).
+
+Definition Read := { o: Op | IsRead o }.
+Definition Write := { o: Op | IsWrite o }.
+Definition Fence := { o: Op | IsFence o }.
+Definition ReadWrite := { o: Op | ~IsFence o }.
+
+Definition Read_To_ReadWrite (o: Read): ReadWrite.
+Proof.
+  destruct o as [owf r].
+  pose (owf2 := owf).
+  destruct (owf) as [[]].
+  all: refine (exist _ owf2 _).
+  all: auto.
+Defined.
+
+Definition Write_To_ReadWrite (o: Write): ReadWrite.
+Proof.
+  destruct o as [owf w].
+  pose (owf2 := owf).
+  destruct (owf) as [[]].
+  all: refine (exist _ owf2 _).
+  all: auto.
+Defined.
+
 Definition mode (o: Op) :=
-  match o with
+  match `o with
     read (exist _ m _) _
   | write (exist _ m _) _
   | fence (exist _ m _)
   | rmw (exist _ m _) _ => m
   end.
 
-Definition from (o: Op) (WF: IsRead o) :=
-  match o, WF
-  with
-    write _ _, WF'
-  | fence _, WF' => match hahn__not_false_is_true WF' with end
-  | read _ f, WF'
-  | rmw _ f, WF' => f
-  end.
+Definition IsRel (o: Op) := In (mode o) [mRel;mAcqRel;mSc].
+Definition IsAcq (o: Op) := In (mode o) [mAcq;mAcqRel;mSc].
 
-Conjecture op_reads_from_write: forall (o: Op) (r: IsRead o), IsWrite (from o r).
-
-Lemma write_not_fence (o: Op) (W: IsWrite o): ~IsFence o.
-Proof
-  match o
-    return IsWrite o -> ~IsFence o
-  with
+(*
+Fixpoint rf_chain_length (o: Op') :=
+  match o with
     write _ _
-  | rmw _ _ => fun _ => hahn__not_false_is_true
-  | read _ _ => fun _ => hahn__not_false_is_true
-  | fence _ => fun W' => match hahn__not_false_is_true W' with end
-  end W.
-
-Fixpoint loc (o: Op) (WF: ~IsFence o) :=
-  match o, WF
-  with
-    write _ l as o', WF' => l
-  | read _ f as o', WF'
-  | rmw _ f as o', WF' => loc f (write_not_fence _ (op_reads_from_write o' eq_refl))
-  | fence _ as o', WF' => match WF' eq_refl with end
+  | fence _ => 0
+  | read _ f
+  | rmw _ f => 1 + (rf_chain_length f)
   end.
+*)
+
+Lemma write_not_fence o: IsWrite' o -> ~IsFence' o.
+Proof.
+  destruct o.
+  all: auto.
+Qed.
+
+Fixpoint loc' (o: Op') (WF: OP_WF o) (NF: ~IsFence' o) :=
+  match o as o'
+    return ~IsFence' o' -> OP_WF o' -> Loc
+  with
+    write _ l => fun _ _ => l
+  | read _ f
+  | rmw _ f => fun _ '(conj _ (conj rfw fwf)) => loc' f (fwf eq_refl) (write_not_fence f (rfw eq_refl))
+  | fence _ => fun NF' WF' => match NF' eq_refl with end
+  end NF WF.
+
+Definition loc (o: ReadWrite) :=
+  loc' (``o) (proj2_sig (`o)) (proj2_sig o).
+
+Lemma sig_ext: forall T P (x y: {o: T | P o}), `x = `y -> x = y.
+Proof.
+  unfold proj1_sig.
+  ins.
+  destruct x as [x p], y as [y q].
+  subst y.
+  assert (p = q).
+  apply proof_irrelevance.
+  subst q.
+  reflexivity.
+Qed.
+
+Lemma eq_dec_Op': forall o1 o2: Op', {o1 = o2} + {o1 <> o2}.
+Proof.
+  pose sig_ext.
+  pose f_equal.
+  decide equality.
+  decide equality.
+  all: assert (sumbool (`m = `m0) (`m <> `m0)).
+  1,3,5,7: decide equality.
+  destruct H.
+  left; auto. right; contradict n; auto.
+  destruct H0.
+  left; auto. right; contradict n; auto.
+  destruct H.
+  left; auto. right; contradict n; auto.
+  destruct H0.
+  left; auto. right; contradict n; auto.
+Qed.
+
+Lemma test3: forall A: Type, well_founded (fun x y => @length A x < @length A y).
+Proof.
+  unfold well_founded; ins.
+  assert (H : forall n a, length a < n -> Acc (fun x y => @length A x < @length A y) a).
+  { induction n.
+    - intros; absurd (length a < 0); auto with *.
+    - intros a0 Ha. constructor 1. intros b Hb.
+      apply IHn. apply PeanoNat.Nat.lt_le_trans with (length a0); auto with arith. }
+  apply (H (S (length a))). auto with arith.
+Defined.
+
+Lemma test: forall A: Type, well_founded (fun x y => @length A x < @length A y).
+Proof.
+  unfold well_founded; ins.
+  pose (n := S (length a)).
+  assert (length a < n); auto.
+  generalize n a H.
+  clear n H.
+  induction n.
+  auto with *.
+  constructor 1.
+  intros.
+  apply IHn.
+  auto with *.
+Qed.
+
+Lemma test2: forall A: Type, well_founded (fun x y => @length A x < @length A y).
+Proof.
+  constructor 1.
+  induction a.
+  2: constructor 1.
+  all: simpl in *; auto with *.
+Qed.
+
+(*
+provide forall a, Acc r a - all elements accessible
+ - reverse map a to an inductive type l such that map(l) = a?
+ - induct on l, provide Acc r a in context C[l] to prove C[l] -> Acc r map(l)
+   - in base case b, provide C[b] -> Acc r map(b)
+     - eg there is no predecessor for map(b), all elems w/o predecessors reverse map to b
+   - in other case s with predecessors p, provide Acc r map(s) with C[s] and (C[p] -> Acc r map(p))
+     - if we didnt map(l) to a, Acc r a would not be rewritten to map(s) and map(p) in here
+     - then this would amount to proving C[p] from C[s] which is recursively proving a contradiction in C[b], but C[l] is sound remember?
+     - we prove C[p] from C[s] and then we have Acc r map(p) i.e. forall y, r y map(p) -> Acc r y
+     - forall y, r y map(s) -> forall y2, r y2 y -> eg if we can prove r y2 map(p), Acc r y2
+ - inductive type needs
+   - map(b) an object with fixed predecessors (eg none)
+   - map(s) can walk back a fixed # steps such that forall y, r y map(p) (eg 2)
+   - this is impossible - do we have to define the whole dag?
+     - Acc itself is like a dag
+ - Dont need to map l to a single a, map to a subset of a's by introducing a constraint in context
+   - prove forall a, C[l] -> Acc r a by induction, for some inductive l, C[l] expresses a constraint on a
+     - top level l must be chosen so C[top] is true for a
+     - top can be independent of a if C[top] is true for any a
+   - forall a, C[base] -> Acc r a
+     - forall a, C[base] -> forall y, r y a -> Acc r y
+     - C[base] constrains a to have no predecessors, forall y, r y a -> R(base) with R(base) -> False
+     - for List, base is []
+     - for Acc, base is any element _:Acc r a where forall y, r y a -> False
+   - (forall a, C[pred] -> Acc r a) -> forall a, C[succ] -> Acc r a:
+     - Given a constrained with C[succ], predecessors of a required to be constrained with C[pred]
+     - (forall b, (forall yp, r yp b -> R(pred)) -> Acc r b) ->
+       forall a,
+       (forall ys, r ys a -> R(succ)) ->
+       forall y,
+       r y a ->
+       Acc r y
+     - b = y, ys = y -> R(succ), (forall yp, r yp y -> R(pred)) -> Acc r y
+     - prove forall a y, r y a -> R(succ) -> forall yp, r yp y -> R(pred)
+     - given condition R(succ) on a y, r y a, and pred smaller than succ, prove R(pred) on yp, r yp y
+   - induction predecessors are chosen from the available structurally smaller types, in the successor calc
+   - So for R: forall a y (p: r y a) (l: inductive) -> Prop we need
+     - forall a y p, R a y p top
+     - forall a y p, R a y p base -> False
+     - forall a y p succ, R a y p succ ->
+         forall yp (pp: r yp y),
+         exists pred (_: Predecessor(succ,pred)),
+         R y yp pp pred
+     - R
+       - admits all a y in the biggest l
+       - provably admits no a y in the smallest l
+       - if it admits a y in l, it admits y yp in some inductive predecessor of l.
+   - suggests a scheme to iteratively restrict the a y that it admits
+     - in this case admitting a y in l means it must admit all transitive predecessor relations of y
+     - because r is acyclic, predecessor relations on predecessors of a do not need to support a
+       - exclude a with each step to meet the succ/pred condition
+     - because Op is finite, we have a list of all possible elements in r
+       - forall a _ _, R a _ _ list is inclusion of a in list
+       - full list is top
+       - empty list is base
+       - forall a _ _ succ, R a _ _ succ, the predecessor is succ excluding a
+     - need to define a list inductive type where forall a, excluding a is a predecessor
+       - Acc (fun x y => lenth(x) < length(y)) findom
+*)
+
+Lemma acy_wf: forall (r: relation Op), acyclic r -> well_founded r.
+Proof.
+  unfold well_founded, acyclic; intros r irr.
+  destruct events'_finite as [findom in_findom].
+  pose (sig_ext := sig_ext _ OP_WF).
+  (* pose (sig_ext2 := f_equal (@proj1_sig _ OP_WF)). *)
+  assert (findom_acc: Acc (fun x y => length(x) < length(y)) findom).
+  { clear in_findom.
+    constructor 1; induction findom.
+    2: constructor 1.
+    all: simpl in *; auto with *. }
+  assert (in_dom: forall o: Op, In (`o) findom).
+  { intros o; destruct o as [o' wf]. { destruct o'; red in wf; desf; auto. } }
+  intros.
+  assert (C: forall y, r⁺ y a -> In (` y) findom).
+  intros; apply in_dom.
+  clear in_dom in_findom; revert a C.
+  induction findom_acc; constructor 1; intros.
+  assert (H1t: r⁺ y a); auto with *.
+  specialize (C y H1t) as C_y.
+  pose (C_y2 := C_y); apply In_split in C_y2; destruct C_y2 as [l1 [l2 Heqsplit]]; subst x.
+  apply H0 with (l1 ++ l2).
+  rewrite !app_length; simpl; auto with *.
+  intros yp pp.
+  assert (`a <> `y).
+  intros ay; apply sig_ext in ay.
+  subst a.
+  apply irr with y.
+  auto with *.
+  generalize (C yp); rewrite !in_app_iff; simpl.
+  intros in_or; destruct in_or as [il1 | [ eq_a | il2 ]].
+  constructor 2 with y; auto.
+  auto.
+  apply sig_ext in eq_a; subst yp; apply irr in pp; auto with *.
+  auto.
+Qed.
 
 (*
 SB:
@@ -105,12 +317,16 @@ thread, which induces a partial order among those evaluations.
 *)
 
 Conjecture sb: relation Op.
-Conjecture StrictOrder_sb: StrictOrder sb.
+Conjecture sb_order: strict_partial_order sb.
 
-(* Do we need to model threads? *)
+(*
+Do we need to model threads? 2 actions on the same thread are not "potentially concurrent" unless in a signal handler,
+so if they are unsequenced and conflict it's undefined. So 2 reads to the same location, or 2 actions on different
+locations, can be unsequenced.
     
 Conjecture thread: Op -> nat.
 Conjecture sb_same_thread: forall x y, sb x y -> thread x = thread y.
+*)
 
 (*
 MO:
@@ -120,6 +336,100 @@ be combined into a single total order for all objects. In general this will be i
 may observe modifications to different objects in inconsistent orders. — end note ]
 *)
 
+Conjecture mo: relation Write.
+Conjecture mo_same_loc_only: mo ≡ restr_eq_rel (loc ∘ Write_To_ReadWrite) mo.
+Conjecture mo_total_order_per_loc: forall l: Loc, strict_total_order (fun x => (loc ∘ Write_To_ReadWrite) x = l) mo.
+
+(*
+RS:
+A release sequence headed by a release operation A on an atomic object M is a maximal contiguous subsequence of
+side effects in the modification order of M, where the first operation is A, and every subsequent operation
+ — is performed by the same thread that performed A, or
+ — is an atomic read-modify-write operation.
+*)
+
+Definition rs :=
+  let mo' := (@proj1_sig _ _) ↑ mo in
+  fun x y =>
+    (⦗IsRel⦘ ⨾ mo'^?) x y /\
+    forall z, mo' x z -> mo'^? z y ->
+      sb x z \/ IsRMW z.
+
+Definition rs2 :=
+  let mo' := (@proj1_sig _ _) ↑ mo in
+    ⦗IsRel⦘ ⨾ mo'^? \ (mo' \ sb) ⨾ ⦗set_compl IsRMW⦘ ⨾ mo'^?.
+
+Definition rs3 :=
+  let mo' := (@proj1_sig _ _) ↑ immediate mo in
+    ⦗IsRel⦘ ⨾ (((mo' ⨾ ⦗IsRMW⦘)＊ ⨾ mo') ∩ sb)＊ ⨾ (mo' ⨾ ⦗IsRMW⦘)＊.
+
+Lemma rs_rs2: rs ≡ rs2.
+Proof.
+  unfold rs, rs2, same_relation, inclusion, seq, minus_rel, eqv_rel, not, clos_refl, set_compl.
+  all: repeat (intros; des; try split).
+  1,4: exists z; auto.
+  1-4: specialize (H0 z0); subst z z1; tauto.
+  1,4: shelve.
+  all: subst z.
+  all: apply NNPP; unfold not; intros; apply H0.
+  all: exists z0; split; auto; exists z0; tauto.
+  Unshelve.
+  all: subst z.
+  all: exists x.
+  all: tauto.
+Qed.
+
+Lemma rs_rs3: rs ≡ rs3.
+Proof.
+  unfold rs, rs3.
+  autounfold with unfolderDb.
+  esplits.
+  ins; desf.
+  exists y.
+  intuition.
+  exists y.
+  intuition.
+  exists (`x').
+  intuition.
+  exists (`y').
+  rewrite clos_refl_transE.
+  rewrite clos_refl_transE.
+  specialize (H0 (`y')) as H0'; destruct H0'; eauto.
+  intuition.
+  right.
+
+
+
+  apply clos_trans.
+  assert (yolo := classic (exists z, mo x' z -> mo z y')).  
+  destruct yolo.
+  econstructor 2.
+  intuition.
+  exists (`y').
+  rewrite clos_refl_transE.
+  intuition.
+  right.
+  constructor 1.
+  exists (`y').
+  intuition.
+  exists x', y'.
+  intuition.
+Qed.
+
+
+  
+(*
+SW:
+Certain library calls synchronize with other library calls performed by another thread. For example, an
+atomic store-release synchronizes with a load-acquire that takes its value from the store (32. 4). [ Note: Except
+in the specified cases, reading a later value does not necessarily ensure visibility as described below. Such a
+requirement would sometimes interfere with efficient implementation. —end note ] [ Note: The specifications
+of the synchronization operations define when one reads the value written by another. For atomic objects ,
+the definition is clear. All operations on a given mutex occur in a single total order. Each mutex acquisition
+“ reads the value written” by the last mutex release. — end note ]
+*)
+
+*)
 (*
 RACE:
 If a side effect on a memory location (4. 4) is unsequenced relative to either another side effect on the same memory location or a
@@ -158,20 +468,6 @@ The value of an object visible to a thread T at a particular point is the initia
 assigned to the object by T, or a value assigned to the object by another thread, according to the rules
 below.
 
-RS:
-A release sequence headed by a release operation A on an atomic object M is a maximal contiguous subsequence of
-side effects in the modification order of M, where the first operation is A, and every subsequent operation
- — is performed by the same thread that performed A, or
- — is an atomic read-modify-write operation.
-
-SW:
-Certain library calls synchronize with other library calls performed by another thread. For example, an
-atomic store-release synchronizes with a load-acquire that takes its value from the store (32. 4). [ Note: Except
-in the specified cases, reading a later value does not necessarily ensure visibility as described below. Such a
-requirement would sometimes interfere with efficient implementation. —end note ] [ Note: The specifications
-of the synchronization operations define when one reads the value written by another. For atomic objects ,
-the definition is clear. All operations on a given mutex occur in a single total order. Each mutex acquisition
-“ reads the value written” by the last mutex release. — end note ]
 
 CD:
 An evaluation A carries a dependency to an evaluation B if
