@@ -148,6 +148,19 @@ Fixpoint loc' (o: Op') (WF: OP_WF o) (NF: ~IsFence' o) :=
 Definition loc (o: ReadWrite) :=
   loc' (``o) (proj2_sig (`o)) (proj2_sig o).
 
+Program Definition from (o: Read): Write :=
+  from' (exist _ (``o) (proj2_sig o)).
+Next Obligation.
+  case (o) as [[o' wf] ir].
+  destruct o', wf as [ev [rfw fwf]].
+  all: apply fwf.
+Qed.
+Next Obligation.
+  case (o) as [[o' wf] ir].
+  destruct o', wf as [ev [rfw fwf]].
+  all: apply rfw.
+Qed.
+
 Lemma sig_ext: forall T P (x y: {o: T | P o}), `x = `y -> x = y.
 Proof.
   unfold proj1_sig.
@@ -1316,8 +1329,82 @@ Proof.
     1-2: auto.
 Qed.
 
+Program Definition rf: relation Op :=
+  fun w r => 
+    exists (iw: IsWrite w) (ir: IsRead r), w = from r.
+Next Obligation.
+  destruct r; auto.
+Qed.
 
-  
+Lemma rf_acy: acyclic rf.
+Proof.
+  assert (d:
+    forall x y, rf⁺ x y ->
+      rf x y \/ exists (ir: IsRead y), rf⁺ x (proj1_sig (from (exist _ y ir)))).
+    intros x y rxy.
+    induction rxy.
+    left; auto.
+    right.
+    destruct IHrxy2 as [(iw & ir & ryz)|[ir ryz]].
+    assert (zeq: exist (fun o : Op' => OP_WF o) (` z) (rf_obligation_1 z ir) = z).
+      apply sig_ext.
+      auto.
+    assert (zeq2:
+      exist _
+        (exist (fun o : Op' => OP_WF o) (` z) (rf_obligation_1 z ir))
+        (rf_obligation_2 z ir) =
+      exist _
+        z
+        (eq_rect _ (fun x => IsRead x) (rf_obligation_2 z ir) _ zeq)).
+      apply sig_ext.
+      apply sig_ext.
+      auto.
+    assert (ryz2 := eq_rect _ (fun x => y = proj1_sig (from x)) ryz _ zeq2).
+    hnf in ryz2.
+    rewrite ryz2 in rxy1.
+    eexists; eauto.
+    exists ir.
+    constructor 2 with y; auto.
+  intros x rxx.
+  remember rxx as rxy.
+  remember x as y in rxy at 2.
+  clear Heqy Heqrxy.
+  destruct y as [y wf].
+  induction y.
+
+  specialize (d _ _ rxy) as [(iw & ir & deq)|(ir & rxf)].
+  1,2: discriminate ir.
+
+  specialize (d _ _ rxy) as [(iw & ir & deq)|(ir & rxf)].
+  unfold from, from' in deq; simpl in deq.
+  eapply IHy.
+  replace x in rxx at 2.
+  eauto.
+  unfold from, from' in rxf; simpl in rxf.
+  eapply IHy.
+  eauto.
+
+  specialize (d _ _ rxy) as [(iw & ir & deq)|(ir & rxf)].
+  1,2: discriminate ir.
+
+  specialize (d _ _ rxy) as [(iw & ir & deq)|(ir & rxf)].
+  unfold from, from' in deq; simpl in deq.
+  eapply IHy.
+  replace x in rxx at 2.
+  eauto.
+  unfold from, from' in rxf; simpl in rxf.
+  eapply IHy.
+  eauto.
+Qed.
+
+(*
+RMW-ATOMIC:
+Atomic read-modify-write operations shall always read the last value (in the modification order) written
+before the write associated with the read-modify-write operation.
+*)
+
+Conjecture rmw_atomic: rf ⨾ ⦗IsRMW⦘ ⊆ (@proj1_sig _ _) ↑ immediate mo.
+
 (*
 SW:
 Certain library calls synchronize with other library calls performed by another thread. For example, an
@@ -1327,70 +1414,108 @@ requirement would sometimes interfere with efficient implementation. —end note
 of the synchronization operations define when one reads the value written by another. For atomic objects ,
 the definition is clear. All operations on a given mutex occur in a single total order. Each mutex acquisition
 “ reads the value written” by the last mutex release. — end note ]
+
+SW:
+An atomic operation A that performs a release operation on an atomic object M synchronizes with an atomic
+operation B that performs an acquire operation on M and takes its value from any side effect in the release
+sequence headed by A.
 *)
 
-*)
+Definition sw: relation Op :=
+  ⦗IsRel⦘ ⨾ rs^? ⨾ rf ⨾ ⦗IsAcq⦘.
+
+Lemma sw_acy: acyclic sw.
+Proof.
+  destruct (mo_total_order_per_loc 0) as [spo _].
+  assert (sw⁺ ⊆ ((@proj1_sig _ _) ↑ mo)^? ⨾ rf).
+    intros x y swxy.
+    induction swxy.
+    destruct H as (x' & [<- xrel] & e & ers & y' & yrf & [-> yacq]).
+    esplit; esplit.
+    2: eauto.
+    destruct ers as [<-|[(x' & [<- xrel2] & moxe) _]].
+    left; auto.
+    auto.
+    destruct IHswxy1 as (e & moxe & rfy).
+    destruct IHswxy2 as (f & moyf & rfz).
+    destruct (rfy) as (eiw & yir & _).
+    destruct moyf as [<-|moyf].
+    
+    destruct (rfz) as (yiw & zir & _).
+    assert (yrmw: IsRMW y).
+      unfold IsRead in yir.
+      unfold IsWrite in yiw.
+      unfold IsRMW.
+      destruct (`y).
+      1-4: compute in yir, yiw; try discriminate yir; try discriminate yiw.
+      reflexivity.
+    lapply (rmw_atomic e y).
+    intros moey.
+    esplit; esplit.
+    2: apply rfz.
+    right.
+    destruct moey as (e' & f' & [moey _] & <- & <-).
+    destruct moxe as [->|(d' & e'' & moxe & <- & ff)].
+    repeat esplit; auto.
+    apply sig_ext in ff; subst e''.
+    repeat esplit.
+    apply spo with e'; auto.
+    esplit; esplit; eauto.
+    esplit; eauto.
+
+    destruct moyf as (e' & f' & moyf & <- & <-).
+    assert (yrmw: IsRMW (`e')).
+      destruct e' as [e' yiw].
+      unfold IsRead in yir.
+      unfold IsWrite in yiw.
+      unfold IsRMW.
+      simpl in *.
+      clear moyf.
+      destruct (`e').
+      1-4: compute in yir, yiw; try discriminate yir; try discriminate yiw.
+      reflexivity.
+    lapply (rmw_atomic e (`e')).
+    intros moey.
+    esplit; esplit.
+    2: apply rfz.
+    right.
+    destruct moey as (e'' & f'' & [moey _] & <- & ff).
+    apply sig_ext in ff; subst f''.
+    destruct moxe as [->|(d' & e''' & moxe & <- & ff)].
+    repeat esplit.
+    apply spo with e'; auto.
+    apply sig_ext in ff; subst e'''.
+    repeat esplit.
+    apply spo with e'; auto.
+    apply spo with e''; auto.
+    esplit; esplit; eauto.
+    esplit; eauto.
+  intros x rxx.
+  apply H in rxx.
+  destruct rxx as (e & moxe & rfx).
+  destruct moxe as [<-|(e' & f' & moey & <- & <-)].
+  apply rf_acy with x; constructor 1; auto.
+  assert (yrmw: IsRMW (`e')).
+    destruct e' as [e' yiw].
+    destruct rfx as [_ [yir _]].
+    unfold IsRead in yir.
+    unfold IsWrite in yiw.
+    unfold IsRMW.
+    simpl in *.
+    clear moey.
+    destruct (`e').
+    1-4: compute in yir, yiw; try discriminate yir; try discriminate yiw.
+    reflexivity.
+  lapply (rmw_atomic (`f') (`e')).
+  intros (e'' & f'' & [mofe _] & ee & ff).
+  apply sig_ext in ee; subst e''.
+  apply sig_ext in ff; subst f''.
+  apply spo with e'; apply spo with f'; auto.
+  esplit; esplit; eauto.
+  esplit; eauto.
+Qed.
+
 (*
-RACE:
-If a side effect on a memory location (4. 4) is unsequenced relative to either another side effect on the same memory location or a
-value computation using the value of any object in the same memory location, and they are not potentially
-concurrent, the behavior is undefined
-
-Two expression evaluations conflict if one of them modifies a memory location (4. 4) and the other one reads
-or modifies the same memory location.
-
-Two actions are potentially concurrent if
- — they are performed by different threads, or
- — they are unsequenced, at least one is performed by a signal handler, and they are not both performed
-by the same signal handler invocation.
-
-The execution of a program contains a data race if it contains two potentially concurrent conflicting actions ,
-at least one of which is not atomic, and neither happens before the other, except for the special case for
-signal handlers described below. Any such data race results in undefined behavior.
-*)
-
-(*
-A conforming implementation executing a well-formed program shall produce the same observable behavior as
-one of the possible executions of the corresponding instance of the abstract machine with the same program
-and the same input .
-
-The least requirements on a conforming implementation are :
-— Accesses through volatile glvalues are evaluated strictly according to the rules of the abstract machine.
-— At program termination, all data written into files shall be identical to one of the possible results that
-execution of the program according to the abstract semantics would have produced.
-— The input and output dynamics of interactive devices shall take place in such a fashion that prompting
-output is actually delivered before a program waits for input. What constitutes an interactive device is
-implementation-defined.
-
-These collectively are referred to as the observable behavior of the program.
-
-The value of an object visible to a thread T at a particular point is the initial value of the object, a value
-assigned to the object by T, or a value assigned to the object by another thread, according to the rules
-below.
-
-
-CD:
-An evaluation A carries a dependency to an evaluation B if
- — the value of A is used as an operand of B, unless :
-   — B is an invocation of any specialization of std: : kill_dependency (32. 4), or
-   — A is the left operand of a built - in logical AND (&&, see 8. 1 4) or logical OR ( | |, see 8. 1 5) operator, or
-   — A is the left operand of a conditional (? :, see 8. 1 6) operator, or
-   — A is the left operand of the built - in comma (, ) operator (8. 1 9) ;
-or
- — A writes a scalar object or bit-field M, B reads the value written by A from M, and A is sequenced
-before B, or
- — for some evaluation X, A carries a dependency to X, and X carries a dependency to B.
-[ Note: “Carries a dependency to” is a subset of “ is sequenced before”, and is similarly strictly intra- thread.
-— end note ]
-
-DOB:
-An evaluation A is dependency-ordered before an evaluation B if
- — A performs a release operation on an atomic object M, and, in another thread, B performs a consume
-operation on M and reads a value written by any side effect in the release sequence headed by A, or
- — for some evaluation X, A is dependency-ordered before X and X carries a dependency to B.
-[ Note: The relation “ is dependency-ordered before” is analogous to “ synchronizes with”, but uses release/ -
-consume in place of release/acquire. — end note ]
-
 ITHB:
 An evaluation A inter-thread happens before an evaluation B if
  — A synchronizes with B, or
@@ -1410,6 +1535,24 @@ The second exception is that a concatenation is not permitted to consist entirel
 reasons for this limitation are (1) to permit “inter- thread happens before” to be transitively closed and (2)
 the “happens before” relation, defined below, provides for relationships consisting entirely of “sequenced
 before”. — end note ]
+*)
+
+Definition ithb x y: Prop :=
+  let f ithb_l ithb_r x y :=
+    sw x y \/
+    (*dob \/*)
+    (sw ⨾ sb) x y \/
+    exists c,
+      sb x c /\ ithb_r c y \/
+      ithb_l x c /\ ithb_r c y in
+  f.
+
+  Fix_F
+    
+
+Definition ithb2: relation Op :=
+  sw ∪ (sw ⨾ sb).
+
 
 HB:
 An evaluation A happens before an evaluation B (or, equivalently, B happens after A) if:
@@ -1476,6 +1619,69 @@ atomic loads with modifications they observe that, together with suitably chosen
 the “happens before” relation derived as described above, satisfy the resulting constraints as imposed here.
 — end note ]
 
+*)
+(*
+RACE:
+If a side effect on a memory location (4. 4) is unsequenced relative to either another side effect on the same memory location or a
+value computation using the value of any object in the same memory location, and they are not potentially
+concurrent, the behavior is undefined
+
+Two expression evaluations conflict if one of them modifies a memory location (4. 4) and the other one reads
+or modifies the same memory location.
+
+Two actions are potentially concurrent if
+ — they are performed by different threads, or
+ — they are unsequenced, at least one is performed by a signal handler, and they are not both performed
+by the same signal handler invocation.
+
+The execution of a program contains a data race if it contains two potentially concurrent conflicting actions ,
+at least one of which is not atomic, and neither happens before the other, except for the special case for
+signal handlers described below. Any such data race results in undefined behavior.
+*)
+
+(*
+A conforming implementation executing a well-formed program shall produce the same observable behavior as
+one of the possible executions of the corresponding instance of the abstract machine with the same program
+and the same input .
+
+The least requirements on a conforming implementation are :
+— Accesses through volatile glvalues are evaluated strictly according to the rules of the abstract machine.
+— At program termination, all data written into files shall be identical to one of the possible results that
+execution of the program according to the abstract semantics would have produced.
+— The input and output dynamics of interactive devices shall take place in such a fashion that prompting
+output is actually delivered before a program waits for input. What constitutes an interactive device is
+implementation-defined.
+
+These collectively are referred to as the observable behavior of the program.
+
+The value of an object visible to a thread T at a particular point is the initial value of the object, a value
+assigned to the object by T, or a value assigned to the object by another thread, according to the rules
+below.
+
+
+CD:
+An evaluation A carries a dependency to an evaluation B if
+ — the value of A is used as an operand of B, unless :
+   — B is an invocation of any specialization of std: : kill_dependency (32. 4), or
+   — A is the left operand of a built - in logical AND (&&, see 8. 1 4) or logical OR ( | |, see 8. 1 5) operator, or
+   — A is the left operand of a conditional (? :, see 8. 1 6) operator, or
+   — A is the left operand of the built - in comma (, ) operator (8. 1 9) ;
+or
+ — A writes a scalar object or bit-field M, B reads the value written by A from M, and A is sequenced
+before B, or
+ — for some evaluation X, A carries a dependency to X, and X carries a dependency to B.
+[ Note: “Carries a dependency to” is a subset of “ is sequenced before”, and is similarly strictly intra- thread.
+— end note ]
+
+DOB:
+An evaluation A is dependency-ordered before an evaluation B if
+ — A performs a release operation on an atomic object M, and, in another thread, B performs a consume
+operation on M and reads a value written by any side effect in the release sequence headed by A, or
+ — for some evaluation X, A is dependency-ordered before X and X carries a dependency to B.
+[ Note: The relation “ is dependency-ordered before” is analogous to “ synchronizes with”, but uses release/ -
+consume in place of release/acquire. — end note ]
+
+
 
 
 DRF:
@@ -1526,10 +1732,7 @@ forms an acquire operation on the affected memory location.
 Implementations must still guarantee that any given atomic access to a particular atomic object be indivisible
 with respect to all other atomic accesses to that object. — end note ]
 
-SW:
-An atomic operation A that performs a release operation on an atomic object M synchronizes with an atomic
-operation B that performs an acquire operation on M and takes its value from any side effect in the release
-sequence headed by A.
+
 
 SC:
 There shall be a single total order S on all memory_order_seq_cst operations, consistent with the “happens
@@ -1599,10 +1802,6 @@ if (r1 == 42) y.store(42, memory_order_relaxed);
 r2 = y.load(memory_order_relaxed);
 if (r2 == 42) x.store(42, memory_order_relaxed);
 — end note ]
-
-RMW-ATOMIC:
-Atomic read-modify-write operations shall always read the last value (in the modification order) written
-before the write associated with the read-modify-write operation.
 
 Implementations should make atomic stores visible to atomic loads within a reasonable amount of time.
 
