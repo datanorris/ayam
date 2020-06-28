@@ -15,151 +15,13 @@ acquire operation on A. “Relaxed” atomic operations are not synchronization 
 synchronization operations, they cannot contribute to data races. — end note ]
 *)
 
+Declare Scope relation_scope.
+
 Require Import List Program RelationClasses.
 From hahn Require Import Hahn.
 
-Inductive Mode := 
-| mPln
-| mRlx
-| mCns
-| mAcq
-| mRel
-| mAcqRel
-| mSc.
-
-Definition Loc := nat.
-
-(* What about memory locations vs. atomic/non-atomic objects *)
-
-Inductive Op' :=
-| write (m: Mode | In m [mPln;mRlx;mRel;mAcqRel;mSc]) (l: Loc)
-| read (m: Mode | In m [mPln;mRlx;mCns;mAcq;mAcqRel;mSc]) (from: Op')
-| fence (m: Mode | In m [mAcq;mRel;mAcqRel;mSc])
-| rmw (m: Mode | In m [mAcq;mRel;mAcqRel;mSc]) (from: Op').
-
-Definition IsRead' (o: Op') :=
-  match o with
-    read _ _
-  | rmw _ _ => true
-  | _ => false
-  end.
-Definition IsWrite' (o: Op') :=
-  match o with
-    write _ _
-  | rmw _ _ => true
-  | _ => false
-  end.
-Definition IsFence' (o: Op') :=
-  match o with
-    fence _ => true
-  | _ => false
-  end.
-Definition IsRMW' (o: Op') :=
-  match o with
-    rmw _ _ => true
-  | _ => false
-  end.
-
-Program Definition from' (o: Op' | IsRead' o) :=
-  match `o as o'
-    return IsRead' o' -> Op'
-  with
-    write _ _
-  | fence _ => _
-  | read _ f
-  | rmw _ f => fun _ => f
-  end (proj2_sig o).
-
-Conjecture events': Op' -> Prop.
-Conjecture events'_finite: set_finite events'.
-
-Program Fixpoint OP_WF (o: Op'): Prop :=
-  ⟪ op_event: events' o ⟫ /\
-  ⟪ op_reads_from_write: forall s: IsRead' o, IsWrite' (from' o) ⟫ /\
-  ⟪ op_from_wf: forall s: IsRead' o, OP_WF (from' o) ⟫.
-
-Definition Op := { o: Op' | OP_WF o }.
-
-Definition IsRead (o: Op) := IsRead' (`o).
-Definition IsWrite (o: Op) := IsWrite' (`o).
-Definition IsFence (o: Op) := IsFence' (`o).
-Definition IsRMW (o: Op) := IsRMW' (`o).
-
-Definition Read := { o: Op | IsRead o }.
-Definition Write := { o: Op | IsWrite o }.
-Definition Fence := { o: Op | IsFence o }.
-Definition ReadWrite := { o: Op | ~IsFence o }.
-
-Definition Read_To_ReadWrite (o: Read): ReadWrite.
-Proof.
-  destruct o as [owf r].
-  pose (owf2 := owf).
-  destruct (owf) as [[]].
-  all: refine (exist _ owf2 _).
-  all: auto.
-Defined.
-
-Definition Write_To_ReadWrite (o: Write): ReadWrite.
-Proof.
-  destruct o as [owf w].
-  pose (owf2 := owf).
-  destruct (owf) as [[]].
-  all: refine (exist _ owf2 _).
-  all: auto.
-Defined.
-
-Definition mode (o: Op) :=
-  match `o with
-    read (exist _ m _) _
-  | write (exist _ m _) _
-  | fence (exist _ m _)
-  | rmw (exist _ m _) _ => m
-  end.
-
-Definition IsRel (o: Op) := In (mode o) [mRel;mAcqRel;mSc].
-Definition IsAcq (o: Op) := In (mode o) [mAcq;mAcqRel;mSc].
-
-(*
-Fixpoint rf_chain_length (o: Op') :=
-  match o with
-    write _ _
-  | fence _ => 0
-  | read _ f
-  | rmw _ f => 1 + (rf_chain_length f)
-  end.
-*)
-
-Lemma write_not_fence o: IsWrite' o -> ~IsFence' o.
-Proof.
-  destruct o.
-  all: auto.
-Qed.
-
-Fixpoint loc' (o: Op') (WF: OP_WF o) (NF: ~IsFence' o) :=
-  match o as o'
-    return ~IsFence' o' -> OP_WF o' -> Loc
-  with
-    write _ l => fun _ _ => l
-  | read _ f
-  | rmw _ f => fun _ '(conj _ (conj rfw fwf)) => loc' f (fwf eq_refl) (write_not_fence f (rfw eq_refl))
-  | fence _ => fun NF' WF' => match NF' eq_refl with end
-  end NF WF.
-
-Definition loc (o: ReadWrite) :=
-  loc' (``o) (proj2_sig (`o)) (proj2_sig o).
-
-Program Definition from (o: Read): Write :=
-  from' (exist _ (``o) (proj2_sig o)).
-Next Obligation.
-  case (o) as [[o' wf] ir].
-  destruct o', wf as [ev [rfw fwf]].
-  all: apply fwf.
-Qed.
-Next Obligation.
-  case (o) as [[o' wf] ir].
-  destruct o', wf as [ev [rfw fwf]].
-  all: apply rfw.
-Qed.
+Notation " ` r " := ((@proj1_sig _ _) ↑ r) : function_scope.
+Delimit Scope function_scope with rel.
 
 Lemma sig_ext: forall T P (x y: {o: T | P o}), `x = `y -> x = y.
 Proof.
@@ -173,335 +35,231 @@ Proof.
   reflexivity.
 Qed.
 
-Lemma eq_dec_Op': forall o1 o2: Op', {o1 = o2} + {o1 <> o2}.
-Proof.
-  pose sig_ext.
-  pose f_equal.
-  decide equality.
-  decide equality.
-  all: assert (sumbool (`m = `m0) (`m <> `m0)).
-  1,3,5,7: decide equality.
-  destruct H.
-  left; auto. right; contradict n; auto.
-  destruct H0.
-  left; auto. right; contradict n; auto.
-  destruct H.
-  left; auto. right; contradict n; auto.
-  destruct H0.
-  left; auto. right; contradict n; auto.
-Qed.
+Inductive Mode := 
+| mPln
+| mRlx
+| mCns
+| mAcq
+| mRel
+| mAcqRel
+| mSc.
 
-Lemma test3: forall A: Type, well_founded (fun x y => @length A x < @length A y).
+(*
+My interpretation of atomic/non-atomic interactions in current standard:
+ - Atomic objects have non-atomic initialization followed by atomic operations
+ - Non-atomic objects don't have atomic operations
+ - Multiple objects can coexist in a memory location, causing races
+*)
+
+Inductive Loc :=
+  loc_atomic (n: nat)
+| loc_nonatomic (n: nat).
+
+Definition Thread := nat.
+
+Inductive Op' :=
+| init (l: Loc) (* 1 initialise to 0 per oject *)
+| write (uid: nat) (t: Thread) (m: Mode | In m [mPln;mRlx;mRel;mAcqRel;mSc]) (l: Loc)
+| read (uid: nat) (t: Thread) (m: Mode | In m [mPln;mRlx;mCns;mAcq;mAcqRel;mSc]) (from: Op')
+| fence (uid: nat) (t: Thread) (m: Mode | In m [mAcq;mRel;mAcqRel;mSc])
+| rmw (uid: nat) (t: Thread) (m: Mode | In m [mAcq;mRel;mAcqRel;mSc]) (from: Op').
+
+Definition IsRead' (o: Op') :=
+  match o with
+    read _ _ _ _
+  | rmw _ _ _ _ => true
+  | _ => false
+  end.
+Definition IsWrite' (o: Op') :=
+  match o with
+    write _ _ _ _
+  | rmw _ _ _ _ => true
+  | _ => false
+  end.
+Definition IsFence' (o: Op') :=
+  match o with
+    fence _ _ _ => true
+  | _ => false
+  end.
+Definition IsRMW' (o: Op') :=
+  match o with
+    rmw _ _ _ _ => true
+  | _ => false
+  end.
+
+Program Definition from' (o: Op' | IsRead' o) :=
+  match `o as o'
+    return IsRead' o' -> Op'
+  with
+    init _
+  | write _ _ _ _
+  | fence _ _ _ => _
+  | read _ _ _ f
+  | rmw _ _ _ f => fun _ => f
+  end (proj2_sig o).
+
+Definition mode' (o: Op') :=
+  match o with
+    init => 
+    read _ _ (exist _ m _) _
+  | write _ _ (exist _ m _) _
+  | fence _ _ (exist _ m _)
+  | rmw _ _ (exist _ m _) _ => m
+  end.
+
+Definition IsAtomic' (o': Op') := mode' o' <> mPln.
+Definition IsAtomicLoc (l: Loc) :=
+  match l with
+    loc_atomic _ => true
+  | loc_nonatomic _ => false
+  end.
+
+Conjecture events': Op' -> Prop.
+Conjecture events'_finite: set_finite events'.
+
+Program Fixpoint OP_WF' (o: Op'): Prop :=
+  ⟪op_event: events' o⟫ /\
+  ⟪op_reads_from_write: forall s: IsRead' o, IsWrite' (from' o)⟫ /\
+  ⟪op_from_wf': forall s: IsRead' o, OP_WF' (from' o)⟫.
+
+Definition loc'
+  (o: Op')
+  (NF: ~IsFence' o)
+  (wf: OP_WF' o): Loc.
 Proof.
-  unfold well_founded; ins.
-  assert (H : forall n a, length a < n -> Acc (fun x y => @length A x < @length A y) a).
-  { induction n.
-    - intros; absurd (length a < 0); auto with *.
-    - intros a0 Ha. constructor 1. intros b Hb.
-      apply IHn. apply PeanoNat.Nat.lt_le_trans with (length a0); auto with arith. }
-  apply (H (S (length a))). auto with arith.
+  pose (truth_hurts :=
+    fun (P: true = true -> Type)
+        (f: forall e: true = true, P e) =>
+        f eq_refl).
+  induction o.
+  apply l.
+  2: contradict NF; reflexivity.
+  all: destruct wf as (ev & rfw%truth_hurts & fwf%truth_hurts).
+  all: apply IHo; destruct o; auto.
 Defined.
 
-Lemma test: forall A: Type, well_founded (fun x y => @length A x < @length A y).
-Proof.
-  unfold well_founded; ins.
-  pose (n := S (length a)).
-  assert (length a < n); auto.
-  generalize n a H.
-  clear n H.
-  induction n.
-  auto with *.
-  constructor 1.
-  intros.
-  apply IHn.
-  auto with *.
-Qed.
+Program Fixpoint OP_WF (o: Op'): Prop :=
+  exists
+    (wf': OP_WF' o),
+    ⟪op_atomicity: forall s: IsRead' o \/ IsWrite' o,
+      IsAtomic' o <-> IsAtomicLoc (loc' o _ _)⟫ /\
+    ⟪op_from_wf: forall s: IsRead' o, OP_WF (from' o)⟫.
+Next Obligation.
+  destruct o; intuition.
+Defined.
 
-Lemma test2: forall A: Type, well_founded (fun x y => @length A x < @length A y).
+Definition Op := { o: Op' | OP_WF o }.
+
+Definition mode (o: Op) :=
+  mode' (`o).
+
+Definition IsAtomic (o: Op) := IsAtomic' (`o).
+Definition IsARead (o: Op) := IsAtomic o /\ IsRead' (`o).
+Definition IsAWrite (o: Op) := IsAtomic o /\ IsWrite' (`o).
+Definition IsFence (o: Op) := IsFence' (`o).
+Definition IsRMW (o: Op) := IsRMW' (`o).
+
+Definition ARead := { o: Op | IsARead o }.
+Definition AWrite := { o: Op | IsAWrite o }.
+Definition Fence := { o: Op | IsFence o }.
+Definition AReadWrite := { o: Op | IsAtomic o /\ ~IsFence o }.
+
+Definition AR2RW (o: ARead): AReadWrite.
 Proof.
-  constructor 1.
-  induction a.
-  2: constructor 1.
-  all: simpl in *; auto with *.
-Qed.
+  destruct o as [owf [a r]].
+  exists owf.
+  destruct owf as [[]].
+  all: repeat split; auto.
+Defined.
+
+Definition AW2RW (o: AWrite): AReadWrite.
+Proof.
+  destruct o as [owf [a w]].
+  exists owf.
+  destruct owf as [[]].
+  all: repeat split; auto.
+Defined.
+
+Definition IsRel (o: Op) := In (mode o) [mRel;mAcqRel;mSc].
+Definition IsAcq (o: Op) := In (mode o) [mAcq;mAcqRel;mSc].
+Definition IsSC (o: Op) := mode o = mSc.
 
 (*
-provide forall a, Acc r a - all elements accessible
- - reverse map a to an inductive type l such that map(l) = a?
- - induct on l, provide Acc r a in context C[l] to prove C[l] -> Acc r map(l)
-   - in base case b, provide C[b] -> Acc r map(b)
-     - eg there is no predecessor for map(b), all elems w/o predecessors reverse map to b
-   - in other case s with predecessors p, provide Acc r map(s) with C[s] and (C[p] -> Acc r map(p))
-     - if we didnt map(l) to a, Acc r a would not be rewritten to map(s) and map(p) in here
-     - then this would amount to proving C[p] from C[s] which is recursively proving a contradiction in C[b], but C[l] is sound remember?
-     - we prove C[p] from C[s] and then we have Acc r map(p) i.e. forall y, r y map(p) -> Acc r y
-     - forall y, r y map(s) -> forall y2, r y2 y -> eg if we can prove r y2 map(p), Acc r y2
- - inductive type needs
-   - map(b) an object with fixed predecessors (eg none)
-   - map(s) can walk back a fixed # steps such that forall y, r y map(p) (eg 2)
-   - this is impossible - do we have to define the whole dag?
-     - Acc itself is like a dag
- - Dont need to map l to a single a, map to a subset of a's by introducing a constraint in context
-   - prove forall a, C[l] -> Acc r a by induction, for some inductive l, C[l] expresses a constraint on a
-     - top level l must be chosen so C[top] is true for a
-     - top can be independent of a if C[top] is true for any a
-   - forall a, C[base] -> Acc r a
-     - forall a, C[base] -> forall y, r y a -> Acc r y
-     - C[base] constrains a to have no predecessors, forall y, r y a -> R(base) with R(base) -> False
-     - for List, base is []
-     - for Acc, base is any element _:Acc r a where forall y, r y a -> False
-   - (forall a, C[pred] -> Acc r a) -> forall a, C[succ] -> Acc r a:
-     - Given a constrained with C[succ], predecessors of a required to be constrained with C[pred]
-     - (forall b, (forall yp, r yp b -> R(pred)) -> Acc r b) ->
-       forall a,
-       (forall ys, r ys a -> R(succ)) ->
-       forall y,
-       r y a ->
-       Acc r y
-     - b = y, ys = y -> R(succ), (forall yp, r yp y -> R(pred)) -> Acc r y
-     - prove forall a y, r y a -> R(succ) -> forall yp, r yp y -> R(pred)
-     - given condition R(succ) on a y, r y a, and pred smaller than succ, prove R(pred) on yp, r yp y
-   - induction predecessors are chosen from the available structurally smaller types, in the successor calc
-   - So for R: forall a y (p: r y a) (l: inductive) -> Prop we need
-     - forall a y p, R a y p top
-     - forall a y p, R a y p base -> False
-     - forall a y p succ, R a y p succ ->
-         forall yp (pp: r yp y),
-         exists pred (_: Predecessor(succ,pred)),
-         R y yp pp pred
-     - R
-       - admits all a y in the biggest l
-       - provably admits no a y in the smallest l
-       - if it admits a y in l, it admits y yp in some inductive predecessor of l.
-   - suggests a scheme to iteratively restrict the a y that it admits
-     - in this case admitting a y in l means it must admit all transitive predecessor relations of y
-     - because r is acyclic, predecessor relations on predecessors of a do not need to support a
-       - exclude a with each step to meet the succ/pred condition
-     - because Op is finite, we have a list of all possible elements in r
-       - forall a _ _, R a _ _ list is inclusion of a in list
-       - full list is top
-       - empty list is base
-       - forall a _ _ succ, R a _ _ succ, the predecessor is succ excluding a
-     - need to define a list inductive type where forall a, excluding a is a predecessor
-       - Acc (fun x y => lenth(x) < length(y)) findom
+Fixpoint rf_chain_length (o: Op') :=
+  match o with
+    write _ _
+  | fence _ => 0
+  | read _ f
+  | rmw _ f => 1 + (rf_chain_length f)
+  end.
 *)
-
-Lemma acy_wf: forall (r: relation Op), acyclic r -> well_founded r.
-Proof.
-  unfold well_founded, acyclic; intros r irr.
-  destruct events'_finite as [findom in_findom].
-  pose (sig_ext := sig_ext _ OP_WF).
-  (* pose (sig_ext2 := f_equal (@proj1_sig _ OP_WF)). *)
-  assert (findom_acc: Acc (fun x y => length(x) < length(y)) findom).
-  { clear in_findom.
-    constructor 1; induction findom.
-    2: constructor 1.
-    all: simpl in *; auto with *. }
-  assert (in_dom: forall o: Op, In (`o) findom).
-  { intros o; destruct o as [o' wf]. { destruct o'; red in wf; desf; auto. } }
-  intros.
-  assert (C: forall y, r⁺ y a -> In (` y) findom).
-  intros; apply in_dom.
-  clear in_dom in_findom; revert a C.
-  induction findom_acc; constructor 1; intros.
-  assert (H1t: r⁺ y a); auto with *.
-  specialize (C y H1t) as C_y.
-  pose (C_y2 := C_y); apply In_split in C_y2; destruct C_y2 as [l1 [l2 Heqsplit]]; subst x.
-  apply H0 with (l1 ++ l2).
-  rewrite !app_length; simpl; auto with *.
-  intros yp pp.
-  assert (`a <> `y).
-  intros ay; apply sig_ext in ay.
-  subst a.
-  apply irr with y.
-  auto with *.
-  generalize (C yp); rewrite !in_app_iff; simpl.
-  intros in_or; destruct in_or as [il1 | [ eq_a | il2 ]].
-  constructor 2 with y; auto.
-  auto.
-  apply sig_ext in eq_a; subst yp; apply irr in pp; auto with *.
-  auto.
-Qed.
-
-Lemma wf_t_invariant A (r: relation A):
-  well_founded r <-> well_founded r⁺.
-Proof.
-  split; intros WF; intros y.
-  induction y using (well_founded_induction WF).
-  constructor 1.
-  intros x rxy.
-  induction rxy.
-  auto.
-  apply IHrxy2; auto.
-  induction y using (well_founded_induction WF).
-  constructor 1.
-  intros x rxy.
-  apply H.
-  constructor 1.
-  auto.
-Qed.
-
-Lemma wf_acy A (r: relation A) (WF: well_founded r):
-  acyclic r.
-Proof.
-  apply wf_t_invariant in WF.
-  unfold acyclic, irreflexive, well_founded in *.
-  intros.
-  induction x using (well_founded_induction WF).
-  specialize (H0 x H H).
-  assumption.
-Qed.
-
-Lemma wf_not_infinite_descending A (r: relation A) (WF: well_founded r):
-  forall f, ~(forall n, r (f (S n)) (f n)).
-Proof.
-  unfold not; intros f.
-  remember (f 0) as x.
-  revert f Heqx.
-  specialize (WF x).
-  induction WF.
-  intros; subst x.
-  eapply H0 with (f := fun x => f (S x)).
-  eapply H1.
-  auto.
-  auto.
-  (* refine (
-      (fix rec n (a: Acc r (f n)) :=
-         match a
-         with
-           Acc_intro _ p =>
-             rec (S n) (p (f (S n)) (H n))
-         end) 0 WF). *)
-Qed.
 
 (*
-why is it so hard to prove that a prefix of a well-founded relation has a well founded inverse?
-because its false.
- - we know r is well founded
-   - for all x, r is well-founded up to x
-   - meaning for all r y x we know r is well founded up to y
-   - which is the statement of inductibility
-     - a proposition P x is proved by induction on r if it can be proved assuming it's true for all
-       y prior to x in r.
-     - unrestricted fixpoints can prove anything so they must be constrained - fix p: ~sky(blue) := p
-       - If the fixpoint terminates, in the base case it does not call itself, so it
-         doesn't rely on itself for its own proof. Non-base cases are then proved incrementally upward.
-       - It terminates if it does not take any infinite path. Requiring fixpoints to descend a
-         well-founded relation is one way to achieve this.
-     - In coq, fixpoints are restricted by requiring them to descend in the structure of an inductive type
-       in order to invoke themselves
-       - for well-founded induction on x, we want to prove P x using proofs of P y for r y x. In the base
-         case there will be no such y.
-       - Our fixpoint will prove P x by descending some inductive Acc r x into Acc r y for all r y x
-         - fix proof_p x (a: Acc r x): P x :=
-             let prior_p y ryx := proof_p y (a y ryx) in _
-     - Our inductive Acc provides the minimal necessary access, and its type, forall y (r y x), forall z (r z y)
-       etc. essentially exhibits a proof that there are descending chains in r, and because it's an inductive,
-       a proof that these chains all terminate.
-       - fix Acc r x := forall y, r x y -> Acc r y
-   - How do you instantiate an inductive like Acc r x?
-     - By recursion on another inductive type, proving it in an assumption context C which is provable
-       at the top level:
-       - if x converts to (f i) and depends on i, induct on i to prove C i -> Acc r (f i)
-       - otherwise, induct on some i to prove forall x, C i x -> Acc r x
-     - At each step, the context assumption is available to prove Acc for current i, and to
-       induct we must provide proofs of the context assumptions for prior i from the current ones
-     - For Acc, to prove forall y, r y x -> Acc r y, we can manually construct Acc r y down to some
-       fixed depth, then we need inductive proofs of all predecessors.
-     - If induction gives access to (prior i) -> C (prior i) -> Acc r (f (prior i)),
-       - We can obtain Acc r y for all r y (f (prior i))
-       - We must be able to prove that after we costruct Acc r (f i) down to a fixed depth,
-         all Acc r y that we need to obtain will be for y that are r y (f (prior i))
-         - Similarly, in the base case with no (prior i), then there is no such y
-     - If induction gives access to (prior i) -> forall x, C (prior i) x Acc r x
-       - After constructing to fixed depth, forall Acc r y we need from induction we must
-         prove C (prior i) z for y = z or r y z
-       - And in the base case, with no (prior i), that there is no y
-     - The role of the context is to restrict the x in Acc r x so that in the base case there are no
-       predecessors, at the top level it doesnt restrict x at all, and at each step it restricts x
-       sufficiently that we can prove that the available Acc r y for C (prior i) y are sufficient to build Acc r x
-       - E.g. inducting on list l with context (r y x -> In y l) - complete in top case, empty in base case,
-         and restricting all our necessary y to be in l, we just need to prove that these y are also In y (prior l)
+Program Fixpoint loc' (o: Op') (WF: OP_WF o) (NF: ~IsFence' o) :=
+  match o as o'
+    return ~IsFence' o' -> OP_WF o' -> Loc
+  with
+    write _ l => fun _ _ => l
+  | read _ f
+  | rmw _ f => fun _ '(conj _ (conj rfw fwf)) => loc' f _ _
+  | fence _ => fun NF' WF' => !(NF' eq_refl)
+  end NF WF.
+Next Obligation.
+  apply fwf; auto.
+Qed.
+Next Obligation.
+  destruct f; auto.
+  discriminate (rfw eq_refl).
+Qed.
+Next Obligation.
+  apply fwf; auto.
+Qed.
+Next Obligation.
+  destruct f; auto.
+  discriminate (rfw eq_refl).
+Qed.
 *)
 
-Definition f_u x y :=
-  x <> 5 /\ (x < y \/ y = 5).
+Program Definition loc (o: AReadWrite) :=
+  loc' (``o) _ _.
+Next Obligation.
+  destruct o as [[o wf] [a nf]]; auto.
+Defined.
+Next Obligation.
+  destruct o as [[o wf] [a nf]]; auto.
+  destruct o; destruct wf; auto.
+Defined.
 
-Lemma wf_fu: well_founded f_u.
-Proof.
-  assert (forall x, x <> 5 -> Acc f_u x).
-  intros x xn5.
-  induction x using (well_founded_induction (Wf_nat.well_founded_ltof _ id)).
-  unfold Wf_nat.ltof, id in *.
-  constructor 1; intros y y0; destruct y0 as [yn5 [ylx|x5]].
-  apply H; assumption.
-  contradiction.
-  intros x.
-  constructor 1; intros y y0; destruct y0 as [yn5 _].
-  apply H; assumption.
-Qed.
-
-Lemma nwf_fu_inv: ~well_founded (f_u ⨾ ⦗f_u⁻¹ 5⦘)⁻¹.
-Proof.
-  intros wf; set (i := 6); specialize (wf i).
-  assert (i >= 6).
-  constructor 1.
-  induction wf.
-  eapply H1.
-  eexists.
-  split.
-  split.
-  auto with *.
-  left.
-  constructor 1.
-  split.
-  reflexivity.
-  split; auto with *.
-  auto with *.
-Qed.
-
-Lemma imm_trans: forall (r: relation Op), strict_partial_order r -> r ≡ (immediate r)⁺.
-Proof.
-  intros r [irr tra].
-  assert (acy: acyclic r).
-    assert (t: r⁺ ⊆ r).
-      intros x y rxy.
-      induction rxy.
-      auto.
-      eapply tra; eauto.
-    intros x rxx.
-    apply t in rxx.
-    eapply irr; eauto.
-  assert (ind := well_founded_induction (acy_wf r acy)).
-  eassert (ind_inv := well_founded_induction (acy_wf r⁻¹ ?[acy_inv])).
-  [acy_inv]: {
-    assert (H: forall x y, r⁻¹⁺ x y -> r⁺ y x).
-      intros x y rxy.
-      induction rxy.
-      constructor 1; assumption.
-      econstructor 2; eauto.
-    intros x rxx.
-    eapply acy; eapply (H x x); assumption.
-  }
-  split.
-  autounfold with unfolderDb.
-  intros x y; revert x.
-  induction y using ind.
-  intros x.
-  induction x using ind_inv.
-  destruct (classic (exists c, r x c /\ r c y)) as [[c [rxc rcy]]|n_imm].
-  constructor 2 with c.
-  apply H; auto.
-  apply H0; auto.
-  intros rxy; constructor 1; split; auto.
-  intros c rxc rcy; apply n_imm.
-  eexists; eauto.
-  autounfold with unfolderDb.
-  intros x y H.
-  induction H.
-  intuition.
-  apply tra with y; auto.
-Qed.
+Program Definition from (o: ARead): AWrite :=
+  from' (``o).
+Next Obligation. (* IsRead' (``o) *)
+  case (o) as [[o' wf] [a r]]; auto.
+Defined.
+Next Obligation. (* OP_WF (from' (``o)) *)
+  case (o) as [[[] (wf' & atom & fwf)]].
+  all: apply fwf.
+Defined.
+Next Obligation. (* IsAWrite (from' (``o)) *)
+  pose (o' := ``o).
+  destruct o as [[[] wf] [ia ir]].
+  all: destruct wf as ((ev & rfw & fwf') & atomloc & fwf).
+  all: split; unfold IsAtomic in *.
+  all: simpl in ia, ir, o' |- *.
+  1,2,5,6: discriminate ir.
+  all: specialize (rfw eq_refl) as rfw_.
+  all: specialize (fwf eq_refl) as fwf_.
+  2,4: assumption.
+  all: destruct from, (fwf eq_refl) as (ffwf' & fatomloc & ffwf).
+  2,3,6,7: discriminate rfw_.
+  all: specialize (atomloc (or_introl eq_refl)).
+  all: specialize (fatomloc (or_intror eq_refl)).
+  all: assert (ffwf' = fwf' eq_refl).
+  1,3,5,7: apply proof_irrelevance.
+  all: subst ffwf'.
+  all: eapply fatomloc.
+  all: eapply atomloc.
+  all: assumption.
+Defined.
 
 (*
 SB:
@@ -530,9 +288,9 @@ may observe modifications to different objects in inconsistent orders. — end n
 
 *)
 
-Conjecture mo: relation Write.
-Conjecture mo_same_loc_only: mo ≡ restr_eq_rel (loc ∘ Write_To_ReadWrite) mo.
-Conjecture mo_total_order_per_loc: forall l: Loc, strict_total_order (fun x => (loc ∘ Write_To_ReadWrite) x = l) mo.
+Conjecture mo: relation AWrite.
+Conjecture mo_same_loc_only: mo ≡ restr_eq_rel (loc ∘ AW2RW) mo.
+Conjecture mo_total_order_per_loc: forall l: Loc, strict_total_order (fun x => (loc ∘ AW2RW) x = l) mo.
 
 (*
 RS:
@@ -543,795 +301,19 @@ side effects in the modification order of M, where the first operation is A, and
 *)
 
 Definition rs :=
-  let mo' := (@proj1_sig _ _) ↑ mo in
+  let mo' := (`mo)%rel in
   fun x y =>
     (⦗IsRel⦘ ⨾ mo'^?) x y /\
     forall z, mo' x z -> mo'^? z y ->
       sb^⋈ x z \/ IsRMW z.
 
-Definition rs2 :=
-  let mo' := (@proj1_sig _ _) ↑ mo in
-    ⦗IsRel⦘ ⨾ mo'^? \ (mo' \ sb^⋈) ⨾ ⦗set_compl IsRMW⦘ ⨾ mo'^?.
-
-Definition rs3 :=
-  let mo' := (@proj1_sig _ _) ↑ immediate mo in
-  fun x =>
-    (⦗eq x⦘ ⨾ ⦗IsRel⦘ ⨾ (((mo' ⨾ ⦗IsRMW⦘)＊ ⨾ mo') ⨾ ⦗sb^⋈ x⦘)＊ ⨾ (mo' ⨾ ⦗IsRMW⦘)＊) x.
-
-Lemma rs_rs2: rs ≡ rs2.
-Proof.
-  unfold rs, rs2, same_relation, inclusion, seq, minus_rel, eqv_rel, not, clos_refl, set_compl.
-  all: repeat (intros; des; try split).
-  1,4: exists z; auto.
-  1-4: specialize (H0 z0); subst z z1; tauto.
-  1,4: shelve.
-  all: subst z.
-  all: apply NNPP; unfold not; intros; apply H0.
-  all: exists z0; split; auto; exists z0; tauto.
-  Unshelve.
-  all: subst z.
-  all: exists x.
-  all: tauto.
-Qed.
-
-Lemma rs_rs3: rs ≡ rs3.
-Proof.
-  unfold rs, rs3.
-  all: autounfold with unfolderDb.
-  set (mo' := (@proj1_sig _ _) ↑ mo).
-  assert (mo_mo': forall x y, mo x y <-> mo' (`x) (`y)).
-    split.
-    intros moxy.
-    eexists; eexists; split; try split.
-    1-3: eauto.
-    intros moxy.
-    destruct moxy as (e' & f' & moxy' & ex & fy).
-    apply sig_ext in ex.
-    apply sig_ext in fy.
-    subst e' f'.
-    auto.
-  assert (mo'_mo: forall x y, mo' x y <-> exists x' y', `x' = x /\ `y' = y /\ mo x' y').
-    intros x y.
-    split.
-    intros moxy.
-    destruct moxy as (e' & f' & moxy' & <- & <-).
-    eexists; esplit; try esplit; eauto.
-    intros (e & f & <- & <- & moxy).
-    apply mo_mo'; auto.
-  assert (spo: strict_partial_order mo).
-    specialize (mo_total_order_per_loc (0)).
-    intros sto; apply sto.
-  assert (spo': strict_partial_order mo').
-    destruct spo as [irr tra].
-    split.
-    intros x mxx.
-    apply mo'_mo in mxx.
-    destruct mxx as (e & f & ex & <- & moxy).
-    apply sig_ext in ex; subst f.
-    eapply irr; eauto.
-    intros x y z moxy moyz.
-    apply mo'_mo in moxy as (e & f & <- & <- & moxy).
-    apply mo'_mo in moyz as (f' & g & ff & <- & moyz).
-    apply sig_ext in ff.
-    subst f'.
-    apply mo_mo'.
-    eapply tra; eauto.
-  split.
-  - intros x y [[z [[xz xIsRel] moxy]] rsCond].
-    subst z.
-    eexists; split; try split; auto;
-      eexists; split; try split; auto.
-    destruct moxy as [xy|(x' & y' & moxy & <- & <-)].
-    eexists; esplit; rewrite clos_refl_transE.
-    1, 2: left; auto.
-    clear xIsRel.
-    apply mo_mo' in moxy.
-    apply (imm_trans mo' spo') in moxy.
-    set (base := x') in rsCond at 2 3.
-    fold base.
-    unfold base at 3.
-    assert (base_x: (`base) = (`x') \/
-                    mo' (`base) (`x') /\ (sb^⋈ (`base) (`x') \/
-                                          IsRMW (`x'))).
-      constructor 1; auto.
-    clearbody base.
-    induction moxy.
-    destruct H as [moxy' imm].
-    pose (moxy := moxy'); apply mo'_mo in moxy; destruct moxy as (x'' & y'' & <- & <- & moxy'').
-    assert (sb^⋈ (`base) (`y'') \/ IsRMW (`y'')).
-      eapply rsCond.
-      eexists; eexists; split; try split.
-      2,3: eauto.
-      auto.
-      destruct base_x as [bx|[mobx]].
-      apply sig_ext in bx; subst x''; auto.
-      apply mo'_mo in mobx; destruct mobx as (e & f & e1 & e2 & mobx).
-      apply sig_ext in e1; subst e.
-      apply sig_ext in e2; subst f.
-      left; auto.
-    destruct H, base_x as [bx|[mobx [x_sb|x_rmw]]].
-    1-6: eexists; esplit; erewrite clos_refl_transE.
-
-    (* base = x, sb x y*)
-    right; econstructor 1; esplit.
-    eexists; esplit.
-    erewrite clos_refl_transE; esplit.
-    left; auto.
-    eexists; eexists; split; split.
-    1-5: eauto.
-    intros c moxc mocy.
-    eapply imm.
-    1-2: eapply mo_mo'; eauto.
-    auto.
-    left; auto.
-
-    (* mo base x, sb base x, sb base y*)
-    right; econstructor 1; eexists; esplit; try erewrite clos_refl_transE; try esplit.
-    1, 2: eexists; try esplit; try esplit; try esplit;
-      try erewrite clos_refl_transE; try left; try esplit.
-    3,4,5: eauto.
-    auto.
-    intros c moxc mocy.
-    eapply imm.
-    1-2: eapply mo_mo'; eauto.
-    left; auto.
-
-    (*  mo base x, isrmw x, sb base y*)
-    right; econstructor 1; eexists; esplit; try erewrite clos_refl_transE; try esplit.
-    1, 2: eexists; try esplit; try esplit; try esplit;
-      try erewrite clos_refl_transE; try left; try esplit.
-    3,4,5: eauto.
-    auto.
-    intros c moxc mocy.
-    eapply imm.
-    1-2: eapply mo_mo'; eauto.
-    left; auto.
-
-    (* base = x, isrmw y *)
-    left; auto.
-    right; econstructor 1; esplit; eexists; esplit; try eexists; try esplit; try esplit;
-      try esplit.
-    1-3: auto.
-    intros c moxc mocy.
-    eapply imm.
-    1-2: eapply mo_mo'; eauto.
-
-    (* mo base x, sb base x, isrmw y *)
-    left; auto.
-    right; econstructor 1; eexists; esplit; try erewrite clos_refl_transE; try esplit.
-    1, 2: eexists; try esplit; try esplit; try esplit;
-      try erewrite clos_refl_transE; try left; try esplit.
-    1-3: eauto.
-    intros c moxc mocy.
-    eapply imm.
-    1-2: eapply mo_mo'; eauto.
-
-    (* mo base x, isrmw x, isrmw y *)
-    left; auto.
-    right; econstructor 1; eexists; esplit; try erewrite clos_refl_transE; try esplit.
-    1, 2: eexists; try esplit; try esplit; try esplit;
-      try erewrite clos_refl_transE; try left; try esplit.
-    1-3: eauto.
-    intros c moxc mocy.
-    eapply imm.
-    1-2: eapply mo_mo'; eauto.
-
-    apply imm_trans in moxy1.
-    apply mo'_mo in moxy1 as (e & f & <- & <- & moxy1).
-    apply mo_mo' in moxy1.
-    apply imm_trans in moxy2.
-    apply mo'_mo in moxy2 as (e' & f' & ef & fz & moxy2).
-    apply sig_ext in ef.
-    subst e' z.
-    apply mo_mo' in moxy2.
-
-    eassert (s1 := IHmoxy1 ?[f] ?[g]).
-    [f]: {
-      intros z' (e'' & f'' & moef & ee & fz) [fz'|(e''' & f''' & moef' & ez & fy)].
-      all: subst z'.
-      all: apply sig_ext in ee.
-      apply sig_ext in fz'.
-      subst e'' f''.
-      apply rsCond.
-      eexists; eexists; esplit; try esplit.
-      1-4: eauto.
-      apply sig_ext in ez.
-      apply sig_ext in fy.
-      subst e'' e''' f'''.
-      apply rsCond.
-      eexists; eexists; esplit; try esplit.
-      2-3: eauto.
-      auto.
-      right.
-      eexists; eexists; esplit; try esplit.
-      2-3: eauto.
-      apply spo with f; auto.
-      apply mo_mo'; auto.
-    }
-    [g]: {
-      apply base_x.
-    }
-    eassert (s2 := IHmoxy2 ?[f]).
-    [f]: {
-      intros z' (e'' & f'' & moef & ee' & fz) [fz'|(e''' & f''' & moef' & ez & fy)].
-      all: subst z'.
-      all: apply sig_ext in ee'.
-      apply sig_ext in fz'.
-      2: apply sig_ext in ez; apply sig_ext in fy.
-      all: subst e'' f''.
-      apply rsCond.
-      eexists; eexists; esplit; try esplit.
-      2-3: eauto.
-      apply mo_mo'; apply spo' with (`f); auto.
-      left; auto.
-      subst f'''.
-      apply rsCond.
-      eexists; eexists; esplit; try esplit.
-      2-3: eauto.
-      apply mo_mo' in moef.
-      apply mo_mo'.
-      apply spo' with (`f); auto.
-      right.
-      eexists; eexists; esplit; try esplit.
-      2-3: eauto.
-      auto.
-    }
-    2-3: auto.
-
-    destruct s1 as [e' [s11 s12]].
-    apply clos_refl_transE in s11.
-    apply clos_refl_transE in s12.
-    destruct s11 as [ee|s11], s12 as [ef|s12].
-    1-3: subst e'.
-    apply sig_ext in ef.
-    subst f.
-    exfalso; revert moxy1; apply spo'.
-
-    all: lapply s2; clear s2.
-    1,3,5: intros s2.
-    1-3: destruct s2 as [e'' [s21 s22]].
-    1-3: apply clos_refl_transE in s21.
-    1-3: apply clos_refl_transE in s22.
-    1-3: destruct s21 as [ee|s21], s22 as [ef|s22].
-    1-3,5-7,9-11: subst e''.
-    1,4,7: apply sig_ext in ef.
-    1-3: subst f.
-    1-3: exfalso; revert moxy2; apply spo'.
-
-    (* left: rmw. right: rmw *)
-    eexists; esplit; apply clos_refl_transE.
-    left; auto.
-    right; econstructor 2.
-    apply s12.
-    apply s22.
-
-    (* left: rmw. right: sb *)
-    eexists; esplit; apply clos_refl_transE.
-    2: left; auto.
-    right.
-    apply t_step_rt in s21 as [e' [[y'' [[e'' [s21p (p & p' & [mopp ppimm] & xe & yy)]] [ey sbb]]] s21]].
-    subst e' e'' y''.
-    apply clos_refl_transE in s21p; destruct s21p as [pp|s21p].
-    apply sig_ext in pp; subst p.
-    1-2: apply clos_refl_transE in s21; destruct s21 as [pp|s21].
-    1,3: apply sig_ext in pp; subst p'.
-    econstructor 1; repeat esplit.
-    apply clos_refl_transE; right; apply s12.
-    1-3: auto.
-    econstructor 1; repeat esplit.
-    apply clos_refl_transE; right; econstructor 2.
-    apply s12.
-    apply s21p.
-    1-3: auto.
-    econstructor 2.
-    econstructor 1; repeat esplit.
-    apply clos_refl_transE; right.
-    apply s12.
-    apply mopp.
-    1-3: auto.
-    econstructor 2.
-    2: apply s21.
-    econstructor 1; repeat esplit.
-    apply clos_refl_transE; right; econstructor 2.
-    apply s12.
-    apply s21p.
-    1-3: auto.
-
-    (* left: sb. right: rmw *)
-    eexists; esplit; apply clos_refl_transE; right.
-    apply s11.
-    apply s22.
-
-    (* left: sb. right: sb *)
-    eexists; esplit; apply clos_refl_transE.
-    right; econstructor 2.
-    apply s11.
-    apply s21.
-    auto.
-
-    (* left: sb;rmw. right: rmw *)
-    eexists; esplit; apply clos_refl_transE.
-    right.
-    apply s11.
-    right.
-    econstructor 2.
-    apply s12.
-    apply s22.
-    
-    (* left: sb;rmw. right: sb *)
-    apply t_step_rt in s21 as [e''' [[y'' [[e'' [s21p (p & p' & [mopp ppimm] & xe & yy)]] [ey sbb]]] s21]].
-    subst e''' e'' y''.
-    apply clos_refl_transE in s21p; destruct s21p as [pp|s21p].
-    apply sig_ext in pp; subst p.
-    1-2: apply clos_refl_transE in s21; destruct s21 as [pp|s21].
-    1,3: apply sig_ext in pp; subst p'.
-    1-4: eexists; esplit; eapply clos_refl_transE.
-    2,4,6,8: left; auto.
-    1-4: right; econstructor 2.
-    apply s11.
-    econstructor 1; repeat esplit.
-    apply clos_refl_transE; right; apply s12.
-    1-3: auto.
-    apply s11.
-    econstructor 1; repeat esplit.
-    apply clos_refl_transE; right; econstructor 2.
-    apply s12.
-    apply s21p.
-    1-3: auto.
-    2: apply s21.
-    econstructor 2.
-    apply s11.
-    econstructor 1; repeat esplit.
-    apply clos_refl_transE; right.
-    apply s12.
-    1-3: auto.
-    2: apply s21.
-    econstructor 2.
-    apply s11.
-    econstructor 1; repeat esplit.
-    apply clos_refl_transE; right; econstructor 2.
-    apply s12.
-    apply s21p.
-    1-3: auto.
-
-    (* left: rmw. right: sb;rmw *)
-    apply t_step_rt in s21 as [e''' [[y'' [[e' [s21p (p & p' & [mopp ppimm] & xe & yy)]] [ey sbb]]] s21]].
-    subst e''' e' y''.
-    apply clos_refl_transE in s21p; destruct s21p as [pp|s21p].
-    apply sig_ext in pp; subst p.
-    1-2: apply clos_refl_transE in s21; destruct s21 as [pp|s21].
-    1,3: subst e''.
-    1-4: eexists; esplit; eapply clos_refl_transE.
-    right; econstructor 1; repeat esplit.
-    apply clos_refl_transE; right.
-    apply s12.
-    apply mopp.
-    1-2: auto.
-    right; apply s22.
-    right; econstructor 1; repeat esplit.
-    apply clos_refl_transE; right; econstructor 2.
-    apply s12.
-    apply s21p.
-    apply mopp.
-    1-2: auto.
-    right; apply s22.
-    right; econstructor 2.
-    2: apply s21.
-    econstructor 1; repeat esplit.
-    apply clos_refl_transE; right.
-    apply s12.
-    apply mopp.
-    1-2: auto.
-    right; apply s22.
-    right; econstructor 2.
-    2: apply s21.
-    econstructor 1; repeat esplit.
-    apply clos_refl_transE; right; econstructor 2.
-    apply s12.
-    apply s21p.
-    1-3: auto.
-    right; apply s22.
-    
-    (* left: sb. right: sb;rmw *)
-    eexists; esplit; apply clos_refl_transE; right.
-    econstructor 2.
-    apply s11.
-    apply s21.
-    apply s22.
-
-    (* left: sb;rmw. right: sb;rmw *)
-    apply t_step_rt in s21 as [e''' [[y'' [[e'''' [s21p (p & p' & [mopp ppimm] & xe & yy)]] [ey sbb]]] s21]].
-    subst e''' e'''' y''.
-    apply clos_refl_transE in s21p; destruct s21p as [pp|s21p].
-    apply sig_ext in pp; subst p.
-    1-2: apply clos_refl_transE in s21; destruct s21 as [pp|s21].
-    1,3: subst e''.
-    1-4: eexists; esplit; eapply clos_refl_transE.
-    right; econstructor 2.
-    apply s11.
-    econstructor 1; repeat esplit.
-    apply clos_refl_transE; right.
-    apply s12.
-    apply mopp.
-    1-2: auto.
-    right; apply s22.
-    right; econstructor 2.
-    apply s11.
-    econstructor 1; repeat esplit.
-    apply clos_refl_transE; right; econstructor 2.
-    apply s12.
-    apply s21p.
-    apply mopp.
-    1-2: auto.
-    right; apply s22.
-    right; econstructor 2.
-    2: apply s21.
-    econstructor 2.
-    apply s11.
-    econstructor 1; repeat esplit.
-    apply clos_refl_transE; right.
-    apply s12.
-    apply mopp.
-    1-2: auto.
-    right; apply s22.
-    right; econstructor 2.
-    2: apply s21.
-    econstructor 2.
-    apply s11.
-    econstructor 1; repeat esplit.
-    apply clos_refl_transE; right; econstructor 2.
-    apply s12.
-    apply s21p.
-    1-3: auto.
-    right; apply s22.
-
-    apply t_rt_step in s12 as [p [_ [p' [_ [pf rmwf]]]]].
-    subst p'.
-    destruct base_x as [be | [mobe]].
-    apply sig_ext in be; subst base.
-    right; split.
-    auto.
-    right; auto.
-    right; split.
-    apply spo' with (`e); auto.
-    right; auto.
-
-    apply t_rt_step in s11 as [p [_ [p' [_ [pf sbf]]]]].
-    subst p'.
-    destruct base_x as [be | [mobe]].
-    apply sig_ext in be; subst base.
-    right; split.
-    auto.
-    auto.
-    right; split.
-    apply spo' with (`e); auto.
-    auto.
-
-    apply t_rt_step in s12 as [p [_ [p' [_ [pf rmwf]]]]].
-    subst p'.
-    destruct base_x as [be | [mobe]].
-    apply sig_ext in be; subst base.
-    right; split.
-    auto.
-    right; auto.
-    right; split.
-    apply spo' with (`e); auto.
-    right; auto.
-
-  - assert (tot_mo:
-      forall x i c,
-        mo'^⋈ x i -> mo'^⋈ x c ->
-        i <> c -> mo' i c \/ mo' c i). {
-      intros x i c moxi moxc inc.
-      destruct moxi as [moxi|moxi], moxc as [moxc|moxc].
-      all: apply mo'_mo in moxi as (e & f & xx & yy & moxi).
-      all: apply mo'_mo in moxc as (e' & f' & xx' & yy' & moxc).
-      all: subst c i x.
-      all: try apply sig_ext in xx'.
-      all: try apply sig_ext in yy'.
-      all: try subst e.
-      all: try subst f.
-      all: apply mo_same_loc_only in moxi.
-      all: apply mo_same_loc_only in moxc.
-      all: destruct moxi as [moxi xi], moxc as [moxc xc].
-      1,2: rewrite xi in xc; clear xi.
-      3,4: rewrite <- xi in xc; clear xi.
-      1,3: destruct (mo_total_order_per_loc ((loc ∘ Write_To_ReadWrite) f')) as [_ tot].
-      3,4: destruct (mo_total_order_per_loc ((loc ∘ Write_To_ReadWrite) e')) as [_ tot].
-      all: edestruct tot.
-      2,7,12,17: reflexivity.
-      1,5,9,13: try apply xc; try apply (eq_sym xc).
-      all: apply mo_mo' in moxi.
-      all: apply mo_mo' in moxc.
-      1,4,7,10: intros conn; apply inc; apply f_equal; auto.
-      all: apply mo_mo' in H.
-      all: eauto.
-    }
-    intros x y [x' [[xz xx] [x'' [[xz' xisrel] [z [xzsb zyrmw]]]]]].
-    subst x' x''.
-    clear xx.
-    remember x as base.
-    replace base in xzsb at 1 |-.
-    assert (mo_rmw_mo:
-      let imo' := (@proj1_sig _ _) ↑ immediate mo in
-        (imo' ⨾ ⦗IsRMW⦘)⁺ ⊆ mo' \ (mo' ⨾ ⦗set_compl IsRMW⦘ ⨾ mo'^?)). {
-      clear x y z xisrel Heqbase xzsb zyrmw.
-      intros imo' x y xyrmw.
-      induction xyrmw.
-      destruct H as [z' ((x'' & y'' & (moxy & xyimm) & <- & <-) & <- & yrmw)].
-      split.
-      apply mo_mo'; auto.
-      intros (z & moxz & z'' & [<- zrmw] & [->|mozy]).
-      auto.
-      apply mo'_mo in moxz as (x' & z' & xx & <- & moxz).
-      apply mo'_mo in mozy as (z'' & y' & zz & yy & mozy).
-      apply sig_ext in xx.
-      apply sig_ext in yy.
-      apply sig_ext in zz.
-      subst x'' y'' z''.
-      eapply xyimm; eauto.
-      destruct IHxyrmw1 as [moxy yrmw].
-      destruct IHxyrmw2 as [moyz zrmw].
-      split.
-      eapply spo'; eauto.
-      intros (y' & moxy' & z'' & [<- allrmw] & [->|moyz']).
-      apply zrmw; esplit; esplit.
-      2: esplit; esplit.
-      3: left; auto.
-      2: esplit; eauto.
-      auto.
-      destruct (classic (y = y')) as [<-|yneq].
-      apply yrmw; esplit; esplit.
-      2: esplit; esplit.
-      3: left; auto.
-      2: esplit; eauto.
-      auto.
-      destruct (tot_mo x y y'); unfold clos_sym; auto.
-      apply zrmw; esplit; esplit.
-      2: esplit; esplit.
-      3: right.
-      2: esplit; eauto.
-      1-2: eauto.
-      apply yrmw; esplit; esplit.
-      2: esplit; esplit.
-      3: right.
-      2: esplit; eauto.
-      1-2: eauto.
-    }
-    assert (mo_sb_mo:
-      let imo' := (@proj1_sig _ _) ↑ immediate mo in
-        (((imo' ⨾ ⦗IsRMW⦘)＊ ⨾ imo') ⨾ ⦗sb^⋈ base⦘)⁺ ⊆
-        mo' \ (mo' ⨾ ⦗set_compl (IsRMW ∪₁ sb^⋈ base)⦘ ⨾ mo'^?)). {
-      clear x y z xisrel Heqbase xzsb zyrmw.
-      intros imo' x y xyrmw.
-      induction xyrmw.
-      destruct H as [z' [[z'' [zrmw (z & y' & [moxy imm] & <- & <-)]] [<- zsb]]].
-      apply clos_refl_transE in zrmw as [->|zrmw].
-      split.
-      apply mo_mo'; auto.
-      intros (e & moxy' & z'' & [<- allrmw] & [->|moyz']).
-      apply allrmw.
-      right; auto.
-      apply mo'_mo in moxy' as (z' & e' & xx & <- & moxy').
-      apply mo'_mo in moyz' as (e'' & y'' & zz & yy & moyz').
-      apply sig_ext in xx.
-      apply sig_ext in yy.
-      apply sig_ext in zz.
-      subst z' e'' y''.
-      eapply imm; eauto.
-      lapply (mo_rmw_mo x (`z)).
-      intros (z' & moxz).
-      split.
-      eapply spo'.
-      apply z'.
-      apply mo_mo'; auto.
-      intros (e & moxy' & z'' & [<- allrmw] & [->|moyz']).
-      apply allrmw.
-      right; auto.
-      destruct (classic (e = `z)) as [->|yneq].
-      apply moxz; esplit; esplit.
-      2: esplit; esplit.
-      3: left; auto.
-      2: esplit; eauto.
-      2: intros nrmw; apply allrmw; left; auto.
-      auto.
-      destruct (tot_mo x e (`z)); unfold clos_sym; auto.
-      apply moxz; esplit; esplit.
-      2: esplit; esplit.
-      3: right.
-      2: esplit; eauto.
-      apply moxy'.
-      intros nrmw; apply allrmw; left; auto.
-      auto.
-      apply mo'_mo in H as (z'' & e' & xx & <- & H).
-      apply mo'_mo in moyz' as (e'' & y'' & zz & yy & moyz').
-      apply sig_ext in xx.
-      apply sig_ext in yy.
-      apply sig_ext in zz.
-      subst e'' y'' z''.
-      eapply imm; eauto.
-      auto.
-      destruct IHxyrmw1 as [moxy yrmw].
-      destruct IHxyrmw2 as [moyz zrmw].
-      split.
-      eapply spo'; eauto.
-      intros (y' & moxy' & z'' & [<- allrmw] & [->|moyz']).
-      apply zrmw; esplit; esplit.
-      2: esplit; esplit.
-      3: left; auto.
-      2: esplit; eauto.
-      auto.
-      destruct (classic (y = y')) as [<-|yneq].
-      apply yrmw; esplit; esplit.
-      2: esplit; esplit.
-      3: left; auto.
-      2: esplit; eauto.
-      auto.
-      destruct (tot_mo x y y'); unfold clos_sym; auto.
-      apply zrmw; esplit; esplit.
-      2: esplit; esplit.
-      3: right.
-      2: esplit; eauto.
-      1-2: eauto.
-      apply yrmw; esplit; esplit.
-      2: esplit; esplit.
-      3: right.
-      2: esplit; eauto.
-      1-2: eauto.
-    }
-    apply clos_refl_transE in xzsb.
-    apply clos_refl_transE in zyrmw.
-    destruct xzsb as [<-|xzsb], zyrmw as [<-|zyrmw].
-
-    all: repeat try esplit.
-    all: auto.
-    1,3,5,7: intros z' (e & f & moxy & ee & ff) [<-|(e' & f' & moyz & ff' & gg)].
-    1-8:subst base z'.
-
-    apply sig_ext in ff; subst e.
-    exfalso; eapply spo; eauto.
-
-    subst x.
-    apply sig_ext in ff'; subst e'.
-    apply sig_ext in gg; subst e.
-    exfalso; eapply spo; eapply spo; eauto.
-
-    subst x.
-    lapply (mo_rmw_mo (`e) (`f)).
-    intros (moef & allzyrmw).
-    apply NNPP; intros nrmw.
-    apply allzyrmw.
-    esplit; esplit.
-    eauto.
-    esplit; esplit.
-    esplit; eauto.
-    intros nrmw2; apply nrmw; auto.
-    left; auto.
-    auto.
-
-    subst x y.
-    apply sig_ext in ff'; subst e'.
-    lapply (mo_rmw_mo (`e) (`f')).
-    intros (moef & allzyrmw).
-    apply NNPP; intros nrmw.
-    apply allzyrmw.
-    esplit; esplit.
-    eapply mo_mo'; eauto.
-    esplit; esplit.
-    esplit; eauto.
-    intros nrmw2; apply nrmw; auto.
-    right; eapply mo_mo'; eauto.
-    auto.
-    
-    subst x.
-    lapply (mo_sb_mo (`e) (`f)).
-    intros (moef & allxzsb).
-    apply NNPP; intros nrmw.
-    apply allxzsb.
-    esplit; esplit.
-    eauto.
-    esplit; esplit.
-    esplit; eauto.
-    intros [nrmw2|nrmw2]; apply nrmw; auto.
-    left; auto.
-    auto.
-
-    subst x z.
-    apply sig_ext in ff'; subst e'.
-    lapply (mo_sb_mo (`e) (`f')).
-    intros (moef & allxzsb).
-    apply NNPP; intros nrmw.
-    apply allxzsb.
-    esplit; esplit.
-    eapply mo_mo'; eauto.
-    esplit; esplit.
-    esplit; eauto.
-    intros [nrmw2|nrmw2]; apply nrmw; auto.
-    right; eapply mo_mo'; eauto.
-    auto.
-
-    subst x.
-    lapply (mo_sb_mo (`e) z).
-    intros (moez & allxzsb).
-    lapply (mo_rmw_mo z (`f)).
-    intros (mozf & allzyrmw).
-    apply NNPP; intros nrmw.
-    apply allzyrmw.
-    esplit; esplit.
-    eauto.
-    esplit; esplit.
-    esplit; eauto.
-    intros nrmw2; apply nrmw; auto.
-    left; auto.
-    1-2: auto.
-
-    subst x y.
-    apply sig_ext in ff'; subst e'.
-    lapply (mo_sb_mo (`e) z).
-    intros (moez & allxzsb).
-    lapply (mo_rmw_mo z (`f')).
-    intros (mozf & allzyrmw).
-    apply NNPP; intros nrmw.
-    destruct (classic (`f = z)) as [<-|neq].
-
-    apply allxzsb.
-    esplit; esplit.
-    eauto.
-    esplit; esplit.
-    esplit; eauto.
-    intros [nrmw2|nrmw2]; apply nrmw; auto.
-    left; auto.
-
-    destruct (tot_mo (`e) z (`f)); unfold clos_sym; auto.
-    left; apply mo_mo'; auto.
-    apply allzyrmw.
-    esplit; esplit.
-    eauto.
-    esplit; esplit.
-    esplit; eauto.
-    intros nrmw2; apply nrmw; auto.
-    right; apply mo_mo'; auto.
-
-    apply allxzsb.
-    esplit; esplit.
-    eapply mo_mo'; eauto.
-    esplit; esplit.
-    esplit; eauto.
-    intros [nrmw2|nrmw2]; apply nrmw; auto.
-    right; auto.
-    1-2: auto.
-
-    right.
-    lapply (mo_rmw_mo x y).
-    intros (moxy & allzyrmw).
-    apply mo'_mo in moxy as (z' & e' & <- & <- & moxy).
-    eauto.
-    auto.
-
-    right.
-    lapply (mo_sb_mo x z).
-    intros (moxz & allxzsb).
-    apply mo'_mo in moxz as (z' & e' & <- & <- & moxy).
-    eauto.
-    auto.
-
-    right.
-    lapply (mo_rmw_mo z y).
-    intros (mozy & allzyrmw).
-    apply mo'_mo in mozy as (z' & f' & <- & <- & mozy).
-    lapply (mo_sb_mo x (`z')).
-    intros (moxz & allxzsb).
-    apply mo'_mo in moxz as (e' & z'' & <- & yy & moxz).
-    apply sig_ext in yy; subst z''.
-    cut (mo e' f').
-    intros moef; eauto.
-    eapply spo; eauto.
-    1-2: auto.
-Qed.
+(*
+READ FROM
+*)
 
 Program Definition rf: relation Op :=
   fun w r => 
-    exists (iw: IsWrite w) (ir: IsRead r), w = from r.
+    exists (iw: IsAWrite w) (ir: IsARead r), w = from r.
 Next Obligation.
   destruct r; auto.
 Qed.
@@ -1340,7 +322,7 @@ Lemma rf_acy: acyclic rf.
 Proof.
   assert (d:
     forall x y, rf⁺ x y ->
-      rf x y \/ exists (ir: IsRead y), rf⁺ x (proj1_sig (from (exist _ y ir)))).
+      rf x y \/ exists (ir: IsARead y), rf⁺ x (proj1_sig (from (exist _ y ir)))).
     intros x y rxy.
     induction rxy.
     left; auto.
@@ -1355,7 +337,7 @@ Proof.
         (rf_obligation_2 z ir) =
       exist _
         z
-        (eq_rect _ (fun x => IsRead x) (rf_obligation_2 z ir) _ zeq)).
+        (eq_rect _ (fun x => IsARead x) (rf_obligation_2 z ir) _ zeq)).
       apply sig_ext.
       apply sig_ext.
       auto.
@@ -1372,10 +354,10 @@ Proof.
   destruct y as [y wf].
   induction y.
 
-  specialize (d _ _ rxy) as [(iw & ir & deq)|(ir & rxf)].
+  specialize (d _ _ rxy) as [(iw & [ia ir] & deq)|([ia ir] & rxf)].
   1,2: discriminate ir.
 
-  specialize (d _ _ rxy) as [(iw & ir & deq)|(ir & rxf)].
+  specialize (d _ _ rxy) as [(iw & [ia ir] & deq)|([ia ir] & rxf)].
   unfold from, from' in deq; simpl in deq.
   eapply IHy.
   replace x in rxx at 2.
@@ -1384,10 +366,10 @@ Proof.
   eapply IHy.
   eauto.
 
-  specialize (d _ _ rxy) as [(iw & ir & deq)|(ir & rxf)].
+  specialize (d _ _ rxy) as [(iw & [ia ir] & deq)|([ia ir] & rxf)].
   1,2: discriminate ir.
 
-  specialize (d _ _ rxy) as [(iw & ir & deq)|(ir & rxf)].
+  specialize (d _ _ rxy) as [(iw & [ia ir] & deq)|([ia ir] & rxf)].
   unfold from, from' in deq; simpl in deq.
   eapply IHy.
   replace x in rxx at 2.
@@ -1403,7 +385,32 @@ Atomic read-modify-write operations shall always read the last value (in the mod
 before the write associated with the read-modify-write operation.
 *)
 
-Conjecture rmw_atomic: rf ⨾ ⦗IsRMW⦘ ⊆ (@proj1_sig _ _) ↑ immediate mo.
+Conjecture rmw_atomic: rf ⨾ ⦗IsRMW⦘ ⊆ (` (immediate mo))%rel.
+
+(*
+FENCE
+
+This section introduces synchronization primitives called fences. Fences can have acquire semantics, release
+semantics, or both. A fence with acquire semantics is called an acquire fence. A fence with release semantics
+is called a release fence.
+
+A release fence A synchronizes with an acquire fence B if there exist atomic operations X and Y, both
+operating on some atomic object M, such that A is sequenced before X, X modifies M, Y is sequenced before
+B, and Y reads the value written by X or a value written by any side effect in the hypothetical release
+sequence X would head if it were a release operation.
+
+A release fence A synchronizes with an atomic operation B that performs an acquire operation on an atomic
+object M if there exists an atomic operation X such that A is sequenced before X, X modifies M, and B
+reads the value written by X or a value written by any side effect in the hypothetical release sequence X
+would head if it were a release operation.
+
+An atomic operation A that is a release operation on an atomic object M synchronizes with an acquire fence
+B if there exists some atomic operation X on M such that X is sequenced before B and reads the value
+written by A or a value written by any side effect in the release sequence headed by A.
+*)
+
+a sw b if a sb x rs_fence y sb b
+a sw b if a sb x rs_fence x
 
 (*
 SW:
@@ -1423,97 +430,6 @@ sequence headed by A.
 
 Definition sw: relation Op :=
   ⦗IsRel⦘ ⨾ rs^? ⨾ rf ⨾ ⦗IsAcq⦘.
-
-Lemma sw_acy: acyclic sw.
-Proof.
-  destruct (mo_total_order_per_loc 0) as [spo _].
-  assert (sw⁺ ⊆ ((@proj1_sig _ _) ↑ mo)^? ⨾ rf).
-    intros x y swxy.
-    induction swxy.
-    destruct H as (x' & [<- xrel] & e & ers & y' & yrf & [-> yacq]).
-    esplit; esplit.
-    2: eauto.
-    destruct ers as [<-|[(x' & [<- xrel2] & moxe) _]].
-    left; auto.
-    auto.
-    destruct IHswxy1 as (e & moxe & rfy).
-    destruct IHswxy2 as (f & moyf & rfz).
-    destruct (rfy) as (eiw & yir & _).
-    destruct moyf as [<-|moyf].
-    
-    destruct (rfz) as (yiw & zir & _).
-    assert (yrmw: IsRMW y).
-      unfold IsRead in yir.
-      unfold IsWrite in yiw.
-      unfold IsRMW.
-      destruct (`y).
-      1-4: compute in yir, yiw; try discriminate yir; try discriminate yiw.
-      reflexivity.
-    lapply (rmw_atomic e y).
-    intros moey.
-    esplit; esplit.
-    2: apply rfz.
-    right.
-    destruct moey as (e' & f' & [moey _] & <- & <-).
-    destruct moxe as [->|(d' & e'' & moxe & <- & ff)].
-    repeat esplit; auto.
-    apply sig_ext in ff; subst e''.
-    repeat esplit.
-    apply spo with e'; auto.
-    esplit; esplit; eauto.
-    esplit; eauto.
-
-    destruct moyf as (e' & f' & moyf & <- & <-).
-    assert (yrmw: IsRMW (`e')).
-      destruct e' as [e' yiw].
-      unfold IsRead in yir.
-      unfold IsWrite in yiw.
-      unfold IsRMW.
-      simpl in *.
-      clear moyf.
-      destruct (`e').
-      1-4: compute in yir, yiw; try discriminate yir; try discriminate yiw.
-      reflexivity.
-    lapply (rmw_atomic e (`e')).
-    intros moey.
-    esplit; esplit.
-    2: apply rfz.
-    right.
-    destruct moey as (e'' & f'' & [moey _] & <- & ff).
-    apply sig_ext in ff; subst f''.
-    destruct moxe as [->|(d' & e''' & moxe & <- & ff)].
-    repeat esplit.
-    apply spo with e'; auto.
-    apply sig_ext in ff; subst e'''.
-    repeat esplit.
-    apply spo with e'; auto.
-    apply spo with e''; auto.
-    esplit; esplit; eauto.
-    esplit; eauto.
-  intros x rxx.
-  apply H in rxx.
-  destruct rxx as (e & moxe & rfx).
-  destruct moxe as [<-|(e' & f' & moey & <- & <-)].
-  apply rf_acy with x; constructor 1; auto.
-  assert (yrmw: IsRMW (`e')).
-    destruct e' as [e' yiw].
-    destruct rfx as [_ [yir _]].
-    unfold IsRead in yir.
-    unfold IsWrite in yiw.
-    unfold IsRMW.
-    simpl in *.
-    clear moey.
-    destruct (`e').
-    1-4: compute in yir, yiw; try discriminate yir; try discriminate yiw.
-    reflexivity.
-  lapply (rmw_atomic (`f') (`e')).
-  intros (e'' & f'' & [mofe _] & ee & ff).
-  apply sig_ext in ee; subst e''.
-  apply sig_ext in ff; subst f''.
-  apply spo with e'; apply spo with f'; auto.
-  esplit; esplit; eauto.
-  esplit; eauto.
-Qed.
 
 (*
 ITHB:
@@ -1537,23 +453,48 @@ the “happens before” relation, defined below, provides for relationships con
 before”. — end note ]
 *)
 
-Definition ithb x y: Prop :=
-  let f ithb_l ithb_r x y :=
-    sw x y \/
-    (*dob \/*)
-    (sw ⨾ sb) x y \/
-    exists c,
-      sb x c /\ ithb_r c y \/
-      ithb_l x c /\ ithb_r c y in
-  f.
+(*
+Definition is structurally recursive so requires an inductive type.
+But how to prove its acyclicity in the absence of a structural definition?
+Should not matter - an instance of ithhb is well-founded but that doesnt prove the whole relation is
+*)
 
-  Fix_F
-    
+Inductive ithb (x y: Op): Prop :=
+  ithb_sw (r: sw x y)
+(*| ithb_dob (r: dob x y)*)
+| ithb_sw_sb (r: (sw ⨾ sb) x y)
+| ithb_sb_ithb (r: (sb ⨾ ithb) x y)
+| ithb_ithb_ithb (r: (ithb ⨾ ithb) x y).
 
-Definition ithb2: relation Op :=
-  sw ∪ (sw ⨾ sb).
+(*
+Program Fixpoint ithb' x y {measure x (sb⁻¹)} :=
+  sw x y \/
+  (*dob \/*)
+  (sw ⨾ sb) x y \/
+  exists c
+    (p: sb x c), ithb' c y.
+Next Obligation.
+  unfold MR; simpl.
+  lapply (acy_wf sb⁻¹).
+  intros wf [x xp]; revert xp.
+  induction x using (well_founded_induction (wf)).
+  constructor 1.
+  intros [y yp] rxy.
+  apply H.
+  auto.
+  destruct (sb_order) as [irr tra].
+  intros x rxx.
+  apply -> clos_trans_of_transitive in rxx.
+  apply irr with x; auto.
+  intros e f g ref reg.
+  apply tra with f; auto.
+Qed.
+*)
 
+Definition ithb_alt: relation Op :=
+  (sb^? ⨾ ((* dob ∪ *)(sw ⨾ sb^?)))⁺.
 
+(*
 HB:
 An evaluation A happens before an evaluation B (or, equivalently, B happens after A) if:
  — A is sequenced before B, or
@@ -1561,15 +502,147 @@ An evaluation A happens before an evaluation B (or, equivalently, B happens afte
 The implementation shall ensure that no program execution demonstrates a cycle in the “happens before”
 relation. [ Note: This cycle would otherwise be possible only through the use of consume operations. — end
 note ]
+*)
 
+Definition hb := sb ∪ ithb.
+
+(*
 SHB:
 An evaluation A strongly happens before an evaluation B if either
  — A is sequenced before B, or
  — A synchronizes with B, or
  — A strongly happens before X and X strongly happens before B.
 [ Note: In the absence of consume operations, the happens before and strongly happens before relations are
-identical. S trongly happens before essentially excludes consume operations. — end note ]
+identical. Strongly happens before essentially excludes consume operations. — end note ]
+*)
 
+(*
+INIT:
+
+Variables with static storage duration are initialized as a consequence of program initiation. Variables with
+thread storage duration are initialized as a consequence of thread execution. Within each of these phases of
+initiation, initialization occurs as follows.
+
+Together, zero-initialization and constant initialization are called static initialization;
+all other initialization is dynamic initialization.
+
+All static initialization strongly happens before (4.7.1) any dynamic initialization. [ Note: The dynamic
+initialization of non-local variables is described in 6.6.3; that of local static variables is described in
+9.7. — end note ]
+
+Initializing atomic objects is non-atomic.
+*)
+
+Definition shb := (sb ∪ sw)⁺.
+
+(*
+COHERENCE:
+The value of an atomic object M, as determined by evaluation B, shall be the value stored by some side effect
+A that modifies M, where B does not happen before A. [ Note: The set of such side effects is also restricted
+by the rest of the rules described here, and in particular, by the coherence requirements below. — end note ]
+*)
+
+Conjecture coherence_rf: hb ⊆ hb \ rf⁻¹.
+
+(*
+COHERENCE:
+If an operation A that modifies an atomic object M happens before an operation B that modifies M, then
+A shall be earlier than B in the modification order of M. [ Note: This requirement is known as write-write
+coherence. — end note ]
+*)
+
+Conjecture coherence_ww: hb ⊆ hb \ (`mo⁻¹)%rel.
+
+(*
+COHERENCE:
+If a value computation A of an atomic object M happens before a value computation B of M, and A takes
+its value from a side effect X on M, then the value computed by B shall either be the value stored by X or
+the value stored by a side effect Y on M, where Y follows X in the modification order of M. [ Note: This
+requirement is known as read-read coherence. — end note ]
+*)
+
+Conjecture coherence_rr: @proj1_sig _ _ ↓ hb ⊆ @proj1_sig _ _ ↓ hb \ from ↓ mo⁻¹.
+
+(*
+COHERENCE:
+If a value computation A of an atomic object M happens before an operation B that modifies M, then A
+shall take its value from a side effect X on M, where X precedes B in the modification order of M. [ Note:
+This requirement is known as read-write coherence. — end note ]
+*)
+
+Conjecture coherence_rw: hb ⊆ hb \ (rf⁻¹ ⨾ `mo)%rel.
+
+(*
+COHERENCE:
+If a side effect X on an atomic object M happens before a value computation B of M, then the evaluation B
+shall take its value from X or from a side effect Y that follows X in the modification order of M. [ Note: This
+requirement is known as write-read coherence. — end note ]
+*)
+
+Conjecture coherence_wr: hb ⊆ hb \ (`mo⁻¹ ⨾ rf)%rel.
+
+(*
+SC:
+There shall be a single total order S on all memory_order_seq_cst operations, consistent with the “happens
+before” order and modification orders for all affected locations, such that each memory_order_seq_cst
+operation B that loads a value from an atomic object M observes one of the following values:
+ — the result of the last modification A of M that precedes B in S, if it exists, or
+ — if A exists, the result of some modification of M that is not memory_order_seq_cst and that does not
+happen before A, or
+ — if A does not exist, the result of some modification of M that is not memory_order_seq_cst.
+
+[ Note: Although it is not explicitly required that S include locks, it can always be extended to an order
+that does include lock and unlock operations, since the ordering between those is already included in the
+“happens before” ordering. — end note ]
+*)
+
+Conjecture sc: relation {o: Op | IsSC o}.
+Conjecture sc_total_order: strict_total_order set_full sc.
+Conjecture sc_consistent: (`sc ⊆ `sc \ (hb ∪ `mo)⁻¹)%rel.
+Conjecture sc_read_exclusions: rf ⊆ rf \ (`sc⁻¹ ∪ (`sc ∩ `mo) ⨾ (`sc ∩ `mo) ∪ hb ⨾ immediate (`sc ∩ `mo))%rel.
+
+(*
+SC-Fence:
+For an atomic operation B that reads the value of an atomic object M, if there is a memory_order_seq_cst
+fence X sequenced before B, then B observes either the last memory_order_seq_cst modification of M
+preceding X in the total order S or a later modification of M in its modification order.
+
+SC-Fence:
+For atomic operations A and B on an atomic object M, where A modifies M and B takes its value, if there is
+a memory_order_seq_cst fence X such that A is sequenced before X and B follows X in S, then B observes
+either the effects of A or a later modification of M in its modification order.
+
+SC-Fence:
+For atomic operations A and B on an atomic object M, where A modifies M and B takes its value, if there are
+memory_order_seq_cst fences X and Y such that A is sequenced before X, Y is sequenced before B, and X
+precedes Y in S, then B observes either the effects of A or a later modification of M in its modification order.
+*)
+
+Conjecture sc_fence_1: rf ⊆ rf \ (`mo ⨾ `sc ⨾ ⦗IsFence⦘ ⨾ sb)%rel.
+Conjecture sc_fence_2: rf ⊆ rf \ (`mo ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `sc)%rel.
+Conjecture sc_fence_3: rf ⊆ rf \ (`mo ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `sc ⨾ ⦗IsFence⦘ ⨾ sb)%rel.
+
+(*
+SC-Fence:
+For atomic modifications A and B of an atomic object M, B occurs later than A in the modification order of
+M if:
+ — there is a memory_order_seq_cst fence X such that A is sequenced before X, and X precedes B in S, or
+ — there is a memory_order_seq_cst fence Y such that Y is sequenced before B, and A precedes Y in S, or
+ — there are memory_order_seq_cst fences X and Y such that A is sequenced before X, Y is sequenced
+before B, and X precedes Y in S.
+*)
+
+
+
+(*
+[ Note: memory_order_seq_cst ensures sequential consistency only for a program that is free of data races
+and uses exclusively memory_order_seq_cst operations. Any use of weaker ordering will invalidate this
+guarantee unless extreme care is used. In particular, memory_order_seq_cst fences ensure a total order only
+for the fences themselves. Fences cannot, in general, be used to restore sequential consistency for atomic
+operations with weaker ordering specifications. — end note ]
+*)
+
+(*
 VSE:
 A visible side effect A on a scalar object or bit-field M with respect to a value computation B of M satisfies
 the conditions:
@@ -1581,32 +654,6 @@ or bit-field is visible, then the behavior is either unspecified or undefined. �
 that operations on ordinary objects are not visibly reordered. This is not actually detectable without data
 races, but it is necessary to ensure that data races, as defined below, and with suitable restrictions on the use
 of atomics, correspond to data races in a simple interleaved (sequentially consistent ) execution. —end note ]
-
-COHERENCE:
-The value of an atomic object M, as determined by evaluation B, shall be the value stored by some side effect
-A that modifies M, where B does not happen before A. [ Note: The set of such side effects is also restricted
-by the rest of the rules described here, and in particular, by the coherence requirements below. — end note ]
-
-COHERENCE:
-If an operation A that modifies an atomic object M happens before an operation B that modifies M, then
-A shall be earlier than B in the modification order of M. [ Note: This requirement is known as write-write
-coherence. — end note ]
-
-COHERENCE:
-If a value computation A of an atomic object M happens before a value computation B of M, and A takes
-its value from a side effect X on M, then the value computed by B shall either be the value stored by X or
-the value stored by a side effect Y on M, where Y follows X in the modification order of M. [ Note: This
-requirement is known as read-read coherence. — end note ]
-
-COHERENCE:
-If a value computation A of an atomic object M happens before an operation B that modifies M, then A
-shall take its value from a side effect X on M, where X precedes B in the modification order of M. [ Note:
-This requirement is known as read-write coherence. — end note ]
-
-COHERENCE:
-If a side effect X on an atomic object M happens before a value computation B of M, then the evaluation B
-shall take its value from X or from a side effect Y that follows X in the modification order of M. [ Note: This
-requirement is known as write-read coherence. — end note ]
 
 SC-PER-LOC:
 [ Note: The four preceding coherence requirements effectively disallow compiler reordering of atomic operations
@@ -1731,50 +778,6 @@ forms an acquire operation on the affected memory location.
 [ Note: Atomic operations specifying memory_order_relaxed are relaxed with respect to memory ordering.
 Implementations must still guarantee that any given atomic access to a particular atomic object be indivisible
 with respect to all other atomic accesses to that object. — end note ]
-
-
-
-SC:
-There shall be a single total order S on all memory_order_seq_cst operations, consistent with the “happens
-before” order and modification orders for all affected locations, such that each memory_order_seq_cst
-operation B that loads a value from an atomic object M observes one of the following values:
- — the result of the last modification A of M that precedes B in S, if it exists, or
- — if A exists, the result of some modification of M that is not memory_order_seq_cst and that does not
-happen before A, or
- — if A does not exist, the result of some modification of M that is not memory_order_seq_cst.
-
-[ Note: Although it is not explicitly required that S include locks, it can always be extended to an order
-that does include lock and unlock operations, since the ordering between those is already included in the
-“happens before” ordering. — end note ]
-
-SC-Fence:
-For an atomic operation B that reads the value of an atomic object M, if there is a memory_order_seq_cst
-fence X sequenced before B, then B observes either the last memory_order_seq_cst modification of M
-preceding X in the total order S or a later modification of M in its modification order.
-
-SC-Fence:
-For atomic operations A and B on an atomic object M, where A modifies M and B takes its value, if there is
-a memory_order_seq_cst fence X such that A is sequenced before X and B follows X in S, then B observes
-either the effects of A or a later modification of M in its modification order.
-
-SC-Fence:
-For atomic operations A and B on an atomic object M, where A modifies M and B takes its value, if there are
-memory_order_seq_cst fences X and Y such that A is sequenced before X, Y is sequenced before B, and X
-precedes Y in S, then B observes either the effects of A or a later modification of M in its modification order.
-
-Fence:
-For atomic modifications A and B of an atomic object M, B occurs later than A in the modification order of
-M if:
- — there is a memory_order_seq_cst fence X such that A is sequenced before X, and X precedes B in S, or
- — there is a memory_order_seq_cst fence Y such that Y is sequenced before B, and A precedes Y in S, or
- — there are memory_order_seq_cst fences X and Y such that A is sequenced before X, Y is sequenced
-before B, and X precedes Y in S.
-
-[ Note: memory_order_seq_cst ensures sequential consistency only for a program that is free of data races
-and uses exclusively memory_order_seq_cst operations. Any use of weaker ordering will invalidate this
-guarantee unless extreme care is used. In particular, memory_order_seq_cst fences ensure a total order only
-for the fences themselves. Fences cannot, in general, be used to restore sequential consistency for atomic
-operations with weaker ordering specifications. — end note ]
 
 OOTA:
 Implementations should ensure that no “out-of-thin-air” values are computed that circularly depend on their
