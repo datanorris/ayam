@@ -20,7 +20,11 @@ Declare Scope relation_scope.
 Require Import List Program RelationClasses.
 From hahn Require Import Hahn.
 
-Notation " ` r " := ((@proj1_sig _ _) ↑ r) : function_scope.
+Notation " `↑ r " := ((@proj1_sig _ _) ↑ r) (at level 30): function_scope.
+Notation " `↓ r " := ((@proj1_sig _ _) ↓ r) (at level 30) : function_scope.
+Notation " `↑₁ s " := ((@proj1_sig _ _) ↑₁ s) (at level 30) : function_scope.
+Notation " `↓₁ s " := ((@proj1_sig _ _) ↓₁ s) (at level 30) : function_scope.
+
 Delimit Scope function_scope with rel.
 
 Lemma sig_ext: forall T P (x y: {o: T | P o}), `x = `y -> x = y.
@@ -49,16 +53,29 @@ My interpretation of atomic/non-atomic interactions in current standard:
  - Atomic objects have non-atomic initialization followed by atomic operations
  - Non-atomic objects don't have atomic operations
  - Multiple objects can coexist in a memory location, causing races
+
+INIT:
+
+Variables with static storage duration are initialized as a consequence of program initiation. Variables with
+thread storage duration are initialized as a consequence of thread execution. Within each of these phases of
+initiation, initialization occurs as follows.
+
+Together, zero-initialization and constant initialization are called static initialization;
+all other initialization is dynamic initialization.
+
+All static initialization strongly happens before (4.7.1) any dynamic initialization. [ Note: The dynamic
+initialization of non-local variables is described in 6.6.3; that of local static variables is described in
+9.7. — end note ]
+
+I model this as
+ - all objects can have atomic/non-atomic operations
+ - every read must have a corresponding write - initializations are provided as writes
 *)
 
-Inductive Loc :=
-  loc_atomic (n: nat)
-| loc_nonatomic (n: nat).
-
+Definition Loc := nat.
 Definition Thread := nat.
 
 Inductive Op' :=
-| init (l: Loc) (* 1 initialise to 0 per oject *)
 | write (uid: nat) (t: Thread) (m: Mode | In m [mPln;mRlx;mRel;mAcqRel;mSc]) (l: Loc)
 | read (uid: nat) (t: Thread) (m: Mode | In m [mPln;mRlx;mCns;mAcq;mAcqRel;mSc]) (from: Op')
 | fence (uid: nat) (t: Thread) (m: Mode | In m [mAcq;mRel;mAcqRel;mSc])
@@ -91,16 +108,22 @@ Program Definition from' (o: Op' | IsRead' o) :=
   match `o as o'
     return IsRead' o' -> Op'
   with
-    init _
-  | write _ _ _ _
+    write _ _ _ _
   | fence _ _ _ => _
   | read _ _ _ f
   | rmw _ _ _ f => fun _ => f
   end (proj2_sig o).
 
+Definition thread' (o: Op') :=
+match o with
+  read _ t _ _
+| write _ t _ _
+| fence _ t _
+| rmw _ t _ _ => t
+end.
+
 Definition mode' (o: Op') :=
   match o with
-    init => 
     read _ _ (exist _ m _) _
   | write _ _ (exist _ m _) _
   | fence _ _ (exist _ m _)
@@ -108,24 +131,19 @@ Definition mode' (o: Op') :=
   end.
 
 Definition IsAtomic' (o': Op') := mode' o' <> mPln.
-Definition IsAtomicLoc (l: Loc) :=
-  match l with
-    loc_atomic _ => true
-  | loc_nonatomic _ => false
-  end.
 
 Conjecture events': Op' -> Prop.
 Conjecture events'_finite: set_finite events'.
 
-Program Fixpoint OP_WF' (o: Op'): Prop :=
+Program Fixpoint OP_WF (o: Op'): Prop :=
   ⟪op_event: events' o⟫ /\
   ⟪op_reads_from_write: forall s: IsRead' o, IsWrite' (from' o)⟫ /\
-  ⟪op_from_wf': forall s: IsRead' o, OP_WF' (from' o)⟫.
+  ⟪op_from_wf': forall s: IsRead' o, OP_WF (from' o)⟫.
 
 Definition loc'
   (o: Op')
   (NF: ~IsFence' o)
-  (wf: OP_WF' o): Loc.
+  (wf: OP_WF o): Loc.
 Proof.
   pose (truth_hurts :=
     fun (P: true = true -> Type)
@@ -138,51 +156,61 @@ Proof.
   all: apply IHo; destruct o; auto.
 Defined.
 
-Program Fixpoint OP_WF (o: Op'): Prop :=
-  exists
-    (wf': OP_WF' o),
-    ⟪op_atomicity: forall s: IsRead' o \/ IsWrite' o,
-      IsAtomic' o <-> IsAtomicLoc (loc' o _ _)⟫ /\
-    ⟪op_from_wf: forall s: IsRead' o, OP_WF (from' o)⟫.
-Next Obligation.
-  destruct o; intuition.
-Defined.
-
 Definition Op := { o: Op' | OP_WF o }.
+
+Definition thread (o: Op) :=
+  thread' (`o).
 
 Definition mode (o: Op) :=
   mode' (`o).
 
 Definition IsAtomic (o: Op) := IsAtomic' (`o).
-Definition IsARead (o: Op) := IsAtomic o /\ IsRead' (`o).
-Definition IsAWrite (o: Op) := IsAtomic o /\ IsWrite' (`o).
+Definition IsRead (o: Op) := IsRead' (`o).
+Definition IsWrite (o: Op) := IsWrite' (`o).
 Definition IsFence (o: Op) := IsFence' (`o).
 Definition IsRMW (o: Op) := IsRMW' (`o).
 
-Definition ARead := { o: Op | IsARead o }.
-Definition AWrite := { o: Op | IsAWrite o }.
+Definition Read := { o: Op | IsRead o }.
+Definition Write := { o: Op | IsWrite o }.
 Definition Fence := { o: Op | IsFence o }.
-Definition AReadWrite := { o: Op | IsAtomic o /\ ~IsFence o }.
+Definition ReadWrite := { o: Op | ~IsFence o }.
 
-Definition AR2RW (o: ARead): AReadWrite.
+Definition AR2RW (o: Read): ReadWrite.
 Proof.
-  destruct o as [owf [a r]].
+  destruct o as [owf r].
   exists owf.
   destruct owf as [[]].
   all: repeat split; auto.
 Defined.
 
-Definition AW2RW (o: AWrite): AReadWrite.
+Definition AW2RW (o: Write): ReadWrite.
 Proof.
-  destruct o as [owf [a w]].
+  destruct o as [owf w].
   exists owf.
   destruct owf as [[]].
   all: repeat split; auto.
 Defined.
+
+Lemma AW2RW_inj: forall x y, AW2RW x = AW2RW y -> x = y.
+Proof.
+  intros x y axay.
+  apply (f_equal (@proj1_sig _ _)) in axay.
+  apply sig_ext.
+  destruct x as [[[] xwf] xw], y as [[[] ywf] yw]; auto.
+Qed.
+
+Lemma AR2RW_inj: forall x y, AR2RW x = AR2RW y -> x = y.
+Proof.
+  intros x y axay.
+  apply (f_equal (@proj1_sig _ _)) in axay.
+  apply sig_ext.
+  destruct x as [[[] xwf] xw], y as [[[] ywf] yw]; auto.
+Qed.
 
 Definition IsRel (o: Op) := In (mode o) [mRel;mAcqRel;mSc].
 Definition IsAcq (o: Op) := In (mode o) [mAcq;mAcqRel;mSc].
 Definition IsSC (o: Op) := mode o = mSc.
+Definition IsCns (o: Op) := mode o = mCns.
 
 (*
 Fixpoint rf_chain_length (o: Op') :=
@@ -220,46 +248,51 @@ Next Obligation.
 Qed.
 *)
 
-Program Definition loc (o: AReadWrite) :=
+Program Definition loc (o: ReadWrite) :=
   loc' (``o) _ _.
 Next Obligation.
-  destruct o as [[o wf] [a nf]]; auto.
+  destruct o as [[o wf] nf]; auto.
 Defined.
 Next Obligation.
-  destruct o as [[o wf] [a nf]]; auto.
-  destruct o; destruct wf; auto.
+  destruct o as [[o wf] nf]; auto.
 Defined.
 
-Program Definition from (o: ARead): AWrite :=
+Program Definition from (o: Read): Write :=
   from' (``o).
 Next Obligation. (* IsRead' (``o) *)
-  case (o) as [[o' wf] [a r]]; auto.
+  case (o) as [[o' wf] r]; auto.
 Defined.
 Next Obligation. (* OP_WF (from' (``o)) *)
   case (o) as [[[] (wf' & atom & fwf)]].
   all: apply fwf.
 Defined.
-Next Obligation. (* IsAWrite (from' (``o)) *)
+Next Obligation. (* IsWrite (from' (``o)) *)
   pose (o' := ``o).
-  destruct o as [[[] wf] [ia ir]].
-  all: destruct wf as ((ev & rfw & fwf') & atomloc & fwf).
-  all: split; unfold IsAtomic in *.
-  all: simpl in ia, ir, o' |- *.
-  1,2,5,6: discriminate ir.
+  destruct o as [[[] wf] ir].
+  all: destruct wf as (ev & rfw & fwf).
+  all: unfold IsAtomic in *; simpl in ir, o' |- *.
+  1,3: discriminate ir.
   all: specialize (rfw eq_refl) as rfw_.
   all: specialize (fwf eq_refl) as fwf_.
-  2,4: assumption.
-  all: destruct from, (fwf eq_refl) as (ffwf' & fatomloc & ffwf).
-  2,3,6,7: discriminate rfw_.
-  all: specialize (atomloc (or_introl eq_refl)).
-  all: specialize (fatomloc (or_intror eq_refl)).
-  all: assert (ffwf' = fwf' eq_refl).
-  1,3,5,7: apply proof_irrelevance.
-  all: subst ffwf'.
-  all: eapply fatomloc.
-  all: eapply atomloc.
   all: assumption.
 Defined.
+
+Lemma from_eq: forall x p1 p2, from' (exist _ x p1) = from' (exist _ x p2).
+Proof.
+  intros x p1 p2.
+  assert (H: p1 = p2) by apply proof_irrelevance.
+  rewrite H; auto.
+Qed.
+
+Lemma from_eq_loc: forall x: Read, loc (AR2RW x) = loc (AW2RW (from x)).
+Proof.
+  assert (H: forall x p1 p2 p3 p4, loc' x p1 p3 = loc' x p2 p4).
+    intros.
+    f_equal; apply proof_irrelevance.
+  intros [[[] (ev & rfw & fwf)] xir]; try discriminate xir.
+  all: unfold loc, loc' at 1; cbv - [loc'].
+  all: apply H.
+Qed.
 
 (*
 SB:
@@ -269,14 +302,12 @@ thread, which induces a partial order among those evaluations.
 
 Conjecture sb: relation Op.
 Conjecture sb_order: strict_partial_order sb.
+Conjecture sb_same_thread: funeq thread sb.
 
 (*
 Do we need to model threads? 2 actions on the same thread are not "potentially concurrent" unless in a signal handler,
 so if they are unsequenced and conflict it's undefined. So 2 reads to the same location, or 2 actions on different
 locations, can be unsequenced.
-    
-Conjecture thread: Op -> nat.
-Conjecture sb_same_thread: forall x y, sb x y -> thread x = thread y.
 *)
 
 (*
@@ -286,11 +317,12 @@ order of M. [ Note: There is a separate order for each atomic object. There is n
 be combined into a single total order for all objects. In general this will be impossible since different threads
 may observe modifications to different objects in inconsistent orders. — end note ]
 
+Don't think there is harm in including non-atomic objects in this. They are necessarily totally ordered anyway.
 *)
 
-Conjecture mo: relation AWrite.
-Conjecture mo_same_loc_only: mo ≡ restr_eq_rel (loc ∘ AW2RW) mo.
-Conjecture mo_total_order_per_loc: forall l: Loc, strict_total_order (fun x => (loc ∘ AW2RW) x = l) mo.
+Conjecture mo: relation Write.
+Conjecture mo_same_loc_only: funeq (loc ∘ AW2RW) mo.
+Conjecture mo_total_order_per_loc: forall l: Loc, strict_total_order ((loc ∘ AW2RW) ↓₁ eq l) mo.
 
 (*
 RS:
@@ -300,48 +332,50 @@ side effects in the modification order of M, where the first operation is A, and
  — is an atomic read-modify-write operation.
 *)
 
-Definition rs :=
-  let mo' := (`mo)%rel in
+(* for non-release writes *)
+Definition rs_fence :=
   fun x y =>
-    (⦗IsRel⦘ ⨾ mo'^?) x y /\
-    forall z, mo' x z -> mo'^? z y ->
-      sb^⋈ x z \/ IsRMW z.
+    (⦗`↓₁ IsAtomic⦘ ⨾ mo^?) x y /\
+    forall z, mo x z -> mo^? z y ->
+      thread (`x) = thread (`z) \/ IsRMW (`z).
+
+Definition rs := ⦗`↓₁ IsRel⦘ ⨾ rs_fence.
 
 (*
 READ FROM
 *)
 
-Program Definition rf: relation Op :=
+Program Definition rf: relation ReadWrite :=
   fun w r => 
-    exists (iw: IsAWrite w) (ir: IsARead r), w = from r.
+    exists (ir: IsRead (`r)), w = AW2RW (from (`r)).
 Next Obligation.
-  destruct r; auto.
-Qed.
+  destruct r as [[]]; auto.
+Defined.
 
 Lemma rf_acy: acyclic rf.
 Proof.
   assert (d:
     forall x y, rf⁺ x y ->
-      rf x y \/ exists (ir: IsARead y), rf⁺ x (proj1_sig (from (exist _ y ir)))).
+      rf x y \/ exists (ir: IsRead (`y)), rf⁺ x (AW2RW (from (exist _ (`y) ir)))).
     intros x y rxy.
     induction rxy.
     left; auto.
     right.
-    destruct IHrxy2 as [(iw & ir & ryz)|[ir ryz]].
-    assert (zeq: exist (fun o : Op' => OP_WF o) (` z) (rf_obligation_1 z ir) = z).
+    destruct IHrxy2 as [(ir & ryz)|[ir ryz]].
+    assert (zeq: exist (fun o : Op' => OP_WF o) (`` z) (rf_obligation_1 z ir) = `z).
       apply sig_ext.
       auto.
     assert (zeq2:
       exist _
-        (exist (fun o : Op' => OP_WF o) (` z) (rf_obligation_1 z ir))
+        (exist (fun o : Op' => OP_WF o) (`` z) (rf_obligation_1 z ir))
         (rf_obligation_2 z ir) =
       exist _
-        z
-        (eq_rect _ (fun x => IsARead x) (rf_obligation_2 z ir) _ zeq)).
+        (`z)
+        (eq_rect _ (fun x => IsRead x) (rf_obligation_2 z ir) _ zeq)).
       apply sig_ext.
       apply sig_ext.
       auto.
-    assert (ryz2 := eq_rect _ (fun x => y = proj1_sig (from x)) ryz _ zeq2).
+    assert (ryz2 := eq_rect _ (fun x => y = AW2RW (from x)) ryz _ zeq2).
     hnf in ryz2.
     rewrite ryz2 in rxy1.
     eexists; eauto.
@@ -351,13 +385,13 @@ Proof.
   remember rxx as rxy.
   remember x as y in rxy at 2.
   clear Heqy Heqrxy.
-  destruct y as [y wf].
+  destruct y as [[y wf] yrw].
   induction y.
 
-  specialize (d _ _ rxy) as [(iw & [ia ir] & deq)|([ia ir] & rxf)].
+  specialize (d _ _ rxy) as [(ir & deq)|(ir & rxf)].
   1,2: discriminate ir.
 
-  specialize (d _ _ rxy) as [(iw & [ia ir] & deq)|([ia ir] & rxf)].
+  specialize (d _ _ rxy) as [(ir & deq)|(ir & rxf)].
   unfold from, from' in deq; simpl in deq.
   eapply IHy.
   replace x in rxx at 2.
@@ -366,10 +400,10 @@ Proof.
   eapply IHy.
   eauto.
 
-  specialize (d _ _ rxy) as [(iw & [ia ir] & deq)|([ia ir] & rxf)].
+  specialize (d _ _ rxy) as [(ir & deq)|(ir & rxf)].
   1,2: discriminate ir.
 
-  specialize (d _ _ rxy) as [(iw & [ia ir] & deq)|([ia ir] & rxf)].
+  specialize (d _ _ rxy) as [(ir & deq)|(ir & rxf)].
   unfold from, from' in deq; simpl in deq.
   eapply IHy.
   replace x in rxx at 2.
@@ -380,16 +414,47 @@ Proof.
 Qed.
 
 (*
+CD:
+An evaluation A carries a dependency to an evaluation B if
+ — the value of A is used as an operand of B, unless :
+   — B is an invocation of any specialization of std: : kill_dependency (32. 4), or
+   — A is the left operand of a built - in logical AND (&&, see 8. 1 4) or logical OR ( | |, see 8. 1 5) operator, or
+   — A is the left operand of a conditional (? :, see 8. 1 6) operator, or
+   — A is the left operand of the built - in comma (, ) operator (8. 1 9) ;
+or
+ — A writes a scalar object or bit-field M, B reads the value written by A from M, and A is sequenced
+before B, or
+ — for some evaluation X, A carries a dependency to X, and X carries a dependency to B.
+[ Note: “Carries a dependency to” is a subset of “ is sequenced before”, and is similarly strictly intra- thread.
+— end note ]
+
+Assume the operator conditions are modelled as read-froms
+*)
+
+Definition cd := (rf ∩ (`↓ sb))⁺.
+
+(*
 RMW-ATOMIC:
 Atomic read-modify-write operations shall always read the last value (in the modification order) written
 before the write associated with the read-modify-write operation.
 *)
 
-Conjecture rmw_atomic: rf ⨾ ⦗IsRMW⦘ ⊆ (` (immediate mo))%rel.
+Conjecture rmw_atomic: `↑ rf ⨾ ⦗IsRMW⦘ ⊆ `↑ (immediate mo).
 
 (*
-FENCE
+DOB:
+An evaluation A is dependency-ordered before an evaluation B if
+ — A performs a release operation on an atomic object M, and, in another thread, B performs a consume
+operation on M and reads a value written by any side effect in the release sequence headed by A, or
+ — for some evaluation X, A is dependency-ordered before X and X carries a dependency to B.
+[ Note: The relation “ is dependency-ordered before” is analogous to “ synchronizes with”, but uses release/ -
+consume in place of release/acquire. — end note ]
+*)
 
+Definition dob := AW2RW ↑ rs ⨾ rf ⨾ ⦗`↓₁ IsCns⦘ ⨾ cd^?.
+
+(*
+SW_FENCE:
 This section introduces synchronization primitives called fences. Fences can have acquire semantics, release
 semantics, or both. A fence with acquire semantics is called an acquire fence. A fence with release semantics
 is called a release fence.
@@ -407,12 +472,7 @@ would head if it were a release operation.
 An atomic operation A that is a release operation on an atomic object M synchronizes with an acquire fence
 B if there exists some atomic operation X on M such that X is sequenced before B and reads the value
 written by A or a value written by any side effect in the release sequence headed by A.
-*)
 
-a sw b if a sb x rs_fence y sb b
-a sw b if a sb x rs_fence x
-
-(*
 SW:
 Certain library calls synchronize with other library calls performed by another thread. For example, an
 atomic store-release synchronizes with a load-acquire that takes its value from the store (32. 4). [ Note: Except
@@ -428,8 +488,8 @@ operation B that performs an acquire operation on M and takes its value from any
 sequence headed by A.
 *)
 
-Definition sw: relation Op :=
-  ⦗IsRel⦘ ⨾ rs^? ⨾ rf ⨾ ⦗IsAcq⦘.
+Definition sw :=
+  ⦗IsRel⦘ ⨾ (⦗IsFence⦘ ⨾ sb)^? ⨾ `↑ rs_fence ⨾ `↑ rf ⨾ (sb ⨾ ⦗IsFence⦘)^? ⨾ ⦗IsAcq⦘.
 
 (*
 ITHB:
@@ -461,7 +521,7 @@ Should not matter - an instance of ithhb is well-founded but that doesnt prove t
 
 Inductive ithb (x y: Op): Prop :=
   ithb_sw (r: sw x y)
-(*| ithb_dob (r: dob x y)*)
+| ithb_dob (r: (`↑ dob) x y)
 | ithb_sw_sb (r: (sw ⨾ sb) x y)
 | ithb_sb_ithb (r: (sb ⨾ ithb) x y)
 | ithb_ithb_ithb (r: (ithb ⨾ ithb) x y).
@@ -492,7 +552,7 @@ Qed.
 *)
 
 Definition ithb_alt: relation Op :=
-  (sb^? ⨾ ((* dob ∪ *)(sw ⨾ sb^?)))⁺.
+  (sb^? ⨾ (`↑ dob ∪ (sw ⨾ sb^?)))⁺.
 
 (*
 HB:
@@ -516,24 +576,10 @@ An evaluation A strongly happens before an evaluation B if either
 identical. Strongly happens before essentially excludes consume operations. — end note ]
 *)
 
-(*
-INIT:
-
-Variables with static storage duration are initialized as a consequence of program initiation. Variables with
-thread storage duration are initialized as a consequence of thread execution. Within each of these phases of
-initiation, initialization occurs as follows.
-
-Together, zero-initialization and constant initialization are called static initialization;
-all other initialization is dynamic initialization.
-
-All static initialization strongly happens before (4.7.1) any dynamic initialization. [ Note: The dynamic
-initialization of non-local variables is described in 6.6.3; that of local static variables is described in
-9.7. — end note ]
-
-Initializing atomic objects is non-atomic.
-*)
-
 Definition shb := (sb ∪ sw)⁺.
+
+
+(* can we assume the following for non-atomic too? surely non-atomics are SC-local too *)
 
 (*
 COHERENCE:
@@ -542,7 +588,7 @@ A that modifies M, where B does not happen before A. [ Note: The set of such sid
 by the rest of the rules described here, and in particular, by the coherence requirements below. — end note ]
 *)
 
-Conjecture coherence_rf: hb ⊆ hb \ rf⁻¹.
+Conjecture coherence_rf: hb ⊆ hb \ `↑ rf⁻¹.
 
 (*
 COHERENCE:
@@ -551,7 +597,7 @@ A shall be earlier than B in the modification order of M. [ Note: This requireme
 coherence. — end note ]
 *)
 
-Conjecture coherence_ww: hb ⊆ hb \ (`mo⁻¹)%rel.
+Conjecture coherence_ww: hb ⊆ hb \ `↑ mo⁻¹.
 
 (*
 COHERENCE:
@@ -561,7 +607,7 @@ the value stored by a side effect Y on M, where Y follows X in the modification 
 requirement is known as read-read coherence. — end note ]
 *)
 
-Conjecture coherence_rr: @proj1_sig _ _ ↓ hb ⊆ @proj1_sig _ _ ↓ hb \ from ↓ mo⁻¹.
+Conjecture coherence_rr: `↓ hb ⊆ `↓ hb \ from ↓ mo⁻¹.
 
 (*
 COHERENCE:
@@ -570,7 +616,7 @@ shall take its value from a side effect X on M, where X precedes B in the modifi
 This requirement is known as read-write coherence. — end note ]
 *)
 
-Conjecture coherence_rw: hb ⊆ hb \ (rf⁻¹ ⨾ `mo)%rel.
+Conjecture coherence_rw: hb ⊆ hb \ (`↑ mo ⨾ `↑ rf)⁻¹.
 
 (*
 COHERENCE:
@@ -579,7 +625,526 @@ shall take its value from X or from a side effect Y that follows X in the modifi
 requirement is known as write-read coherence. — end note ]
 *)
 
-Conjecture coherence_wr: hb ⊆ hb \ (`mo⁻¹ ⨾ rf)%rel.
+Conjecture coherence_wr: hb ⊆ hb \ `↑ mo⁻¹ ⨾ `↑ rf.
+
+(*
+SC-PER-LOC:
+[ Note: The four preceding coherence requirements effectively disallow compiler reordering of atomic operations
+to a single object, even if both operations are relaxed loads. This effectively makes the cache coherence
+guarantee provided by most hardware available to C++ atomic operations. — end note ]
+
+A total order per location, extended from sb per location, where each read reads from the write to the same
+location immediately previous.
+
+  sb ww: in mo
+  sb wr: if not rf then in mo; rf
+  sb rw: in rb
+  sb rr (diff writes): in rb;mo?;rf
+  sb rr (same writes): have same rf & rb just need to sequence them
+
+*)
+
+Lemma sc_per_loc:
+  exists scl: relation ReadWrite,
+    (forall l, strict_total_order (loc ↓₁ (eq l)) scl) /\
+    restr_eq_rel loc (`↓ sb) ⊆ scl /\
+    rf ⊆ immediate (restr_eq_rel loc (⦗`↓₁ IsWrite⦘ ⨾ scl)).
+Proof.
+  destruct (mo_total_order_per_loc 0) as [[irr' tra'] _].
+  assert (strict_partial_order (AW2RW ↑ mo)) as [irr tra].
+    split.
+    intros x (e & f & moef & ee & <-).
+    apply AW2RW_inj in ee.
+    subst f.
+    eapply irr'; eauto.
+    intros x y z (e & f & moef & <- & <-) (f' & g & mofg & ff & <-).
+    apply AW2RW_inj in ff.
+    subst f'.
+    repeat esplit.
+    eapply tra'; eauto.
+  pose (rb := (⦗`↓₁ set_compl IsWrite⦘ ⨾ rf⁻¹ ⨾ AW2RW ↑ mo)).
+  pose (sb_sibling_reads := AR2RW ↑ restr_eq_rel from (`↓ restr_rel (set_compl IsWrite) sb)).
+  pose (scl := (sb_sibling_reads ∪ AW2RW ↑ mo ∪ rf ∪ rb)⁺).
+  exists scl.
+
+  assert (rf_mo: forall x y, IsWrite (`y) -> (AW2RW ↑ mo ∪ (AW2RW ↑ mo)^? ⨾ rf) x y -> (AW2RW ↑ mo) x y).
+    intros x y wy [moxy|(e & [->|moex] & [yr rfex])].
+    auto.
+    1,2: assert (yrmw: IsRMW (`y)).
+      1,3: destruct y as [[[]]]; auto.
+    1,2: lapply (rmw_atomic (`e) (`y)).
+    1,3: intros (e' & f & [moxy imm] & xx & yy).
+    2: apply tra with e; auto.
+    1,2: repeat esplit; eauto.
+    1-4: apply sig_ext.
+    1,3: rewrite <- xx; destruct e' as [[[]]]; auto.
+    1,2: rewrite <- yy; destruct f as [[[]]]; auto.
+    1,2: repeat esplit; eauto.
+    1,2: apply f_equal; eauto.
+
+  pose (sclb :=
+    sb_sibling_reads ∪
+    (AW2RW ↑ mo ∪
+     (AW2RW ↑ mo)^? ⨾ rf) ∪
+    rb ⨾ rf^?).
+  assert (to_b: scl ⊆ sclb).
+    intros x y rxy.
+    induction rxy as [x y [[[sbxy|moxy]|rfxy]|rbxy]|].
+    left; left; auto.
+    left; right; left; auto.
+    left; right; right; esplit; eauto.
+    right; esplit; eauto.
+    assert (H: IsWrite (`y) \/ ~IsWrite (`y) /\ IsRead (`y)).
+      clear rxy1 rxy2 IHrxy1 IHrxy2.
+      destruct y as [[[] wf] nf]; auto.
+      contradict nf; auto.
+    destruct H as [iw|[nw ir]].
+    destruct IHrxy1 as
+      [[(x' & y' & [(sbxy & xnw & ynw) fxy] & <- & <-)|
+        morfxy]|
+       (f & (x' & [<- nw] & e & rfex & moef) & rffy)].
+    destruct y'; contradiction.
+    apply rf_mo in morfxy.
+    destruct IHrxy2 as
+      [[(y' & z' & [(sbyz & ynw & znw) fyz] & <- & <-)|
+        [moyz|
+         (e & [<-|moye] & rfez)]]|
+       (e & (y' & [<- nwe] & rbye) & rfez)].
+    destruct y'; contradiction.
+    left; right; left; eapply tra; eauto.
+    left; right; right; esplit; eauto.
+    left; right; right; esplit; esplit.
+    2: eauto.
+    right; eapply tra; eauto.
+    right; eauto.
+    contradiction.
+    auto.
+    assert (moey: (AW2RW ↑ mo) e y).
+      destruct rffy as [<-|[ir rffy]].
+      auto.
+      lapply (rmw_atomic (`f) (`y)).
+      intros (f' & y' & [mofy imm] & ff & yy).
+      eapply tra; eauto.
+      repeat esplit; eauto.
+      1,2: apply sig_ext.
+      rewrite <- ff; destruct f' as [[[]]]; auto.
+      rewrite <- yy; destruct y' as [[[]]]; auto.
+      repeat esplit; eauto.
+      apply f_equal; eauto.
+      destruct y as [[[]]]; auto.
+    right.
+    destruct IHrxy2 as
+      [[(y' & z' & [(sbyz & ynw & znw) fyz] & <- & <-)|
+        [moyz|
+         (g & [<-|moyg] & rfgz)]]|
+       (g & (y' & [<- nwg] & rbyg) & rfgz)].
+    destruct y'; contradiction.
+    1-4: esplit; esplit; [esplit; esplit; esplit; auto; esplit; [eauto|]|].
+    2: left; auto.
+    eapply tra; eauto.
+    2: eauto.
+    auto.
+    2: eauto.
+    eapply tra; eauto.
+    1,2: contradiction.
+    destruct IHrxy2 as
+      [[(y' & z' & [(sbyz & ynw & znw) fyz] & <- & <-)|
+        [([e eiw] & f & moef & <- & <-)|
+         (g & [<-|(y' & g' & moyg & <- & <-)] & zir & rfgz)]]|
+       (g & (y' & [<- nwg] & h & [yir2 rfhy] & mohg) & rfgz)].
+    destruct IHrxy1 as
+      [[(x' & y'' & [(sbxy & xnw & ynw') fxy] & <- & yy)|
+        [(x' & y'' & moxy & <- & yy)|
+         (f & moxf & yir & rffy)]]|
+      (f & (x' & [<- nwx] & e & rfex & moef) & [->|[yir rffy]])].
+    apply AR2RW_inj in yy; subst y''.
+    left; left; esplit; esplit; esplit; esplit.
+    esplit.
+    eapply sb_order.
+    apply sbxy.
+    eauto.
+    eauto.
+    etransitivity; eauto.
+    1,2: auto.
+    apply (f_equal (@proj1_sig _ _)) in yy.
+    destruct y' as [y'], y'' as [y'']; simpl in yy; subst y''; contradiction.
+    left; right; right; esplit; esplit.
+    eauto.
+    esplit.
+    apply sig_ext; apply sig_ext; simpl.
+    apply (f_equal (@proj1_sig _ _)) in rffy.
+    apply (f_equal (@proj1_sig _ _)) in rffy.
+    apply (f_equal (@proj1_sig _ _)) in fyz.
+    apply (f_equal (@proj1_sig _ _)) in fyz.
+    destruct y' as [[[]]]; destruct z' as [[[]]]; compute in rffy, fyz |- *;
+      try discriminate ir; try contradiction.
+    subst from0; auto.
+    destruct moef as (e' & y'' & moef & <- & yy).
+    apply (f_equal (@proj1_sig _ _)) in yy.
+    destruct y' as [y'], y'' as [y'']; simpl in yy; subst y''; contradiction.
+    right; esplit; esplit.
+    esplit; esplit; esplit; auto.
+    eauto.
+    right.
+    esplit.
+    apply sig_ext; apply sig_ext; simpl.
+    apply (f_equal (@proj1_sig _ _)) in rffy.
+    apply (f_equal (@proj1_sig _ _)) in rffy.
+    apply (f_equal (@proj1_sig _ _)) in fyz.
+    apply (f_equal (@proj1_sig _ _)) in fyz.
+    destruct y' as [[[]]]; destruct z' as [[[]]]; compute in rffy, fyz |- *;
+      try discriminate ir; try contradiction.
+    subst from0; auto.
+    simpl in ir; contradiction.
+    destruct z as [[[] (ev & rfw & fwf)] znf]; try discriminate zir.
+    1-2: apply (f_equal (@proj1_sig _ _)) in rfgz; rewrite rfgz in *.
+    1-2: destruct from0; compute in ir, nw, zir, rfw.
+    1-8:
+      try discriminate ir;
+      try contradiction nw;
+      try discriminate (rfw eq_refl).
+    destruct y'; contradiction.
+    destruct IHrxy1 as
+      [[(x' & y' & [(sbxy & xnw & ynw) fxy] & <- & <-)|
+        [(x' & y' & moxy & <- & <-)|
+         (f & moxf & yir & rffy)]]|
+       (f & (x' & [<- nwx] & e & rfex & moef) & [->|[yir rffy]])].
+    right; esplit; esplit.
+    2: apply rfgz.
+    esplit; esplit; esplit; auto.
+    destruct x'; auto.
+    esplit.
+    2: eauto.
+    esplit.
+    apply sig_ext; apply sig_ext; simpl.
+    apply (f_equal (@proj1_sig _ _)) in rfhy.
+    apply (f_equal (@proj1_sig _ _)) in rfhy.
+    apply (f_equal (@proj1_sig _ _)) in fxy.
+    apply (f_equal (@proj1_sig _ _)) in fxy.
+    destruct x' as [[[]]]; destruct y' as [[[]]]; compute in rfhy, fxy |- *;
+      try discriminate ir; try contradiction.
+    subst from0; auto.
+    3: destruct moef as (e' & y' & moey & <- & <-).
+    1,3: destruct y'; contradiction.
+    1,2: assert (H: yir = yir2); [apply proof_irrelevance|].
+    1,2: subst yir2; rewrite <- rffy in *; subst h.
+    left; right.
+    2: right; esplit; esplit.
+    1,3: destruct rfgz; [
+      subst g; left |
+      right
+    ].
+    2: esplit; esplit; [right|].
+    3-5: eauto.
+    1,2: destruct moxf; [subst f; auto|eapply tra; eauto].
+    esplit; esplit; esplit; eauto.
+  
+  all: assert (irr_scl: irreflexive scl).
+    intros x rxy.
+    apply to_b in rxy.
+    destruct rxy as
+      [[(x' & y' & [(sbxx & xnw & ynw) fxy] & <- & yy)|
+        [moxx|
+        (e & [<-|(x' & e' & moxe & <- & <-)] & ir & rfex)]]|
+      (f & (x' & [<- nwx] & e & [xir rfex] & moef) & [->|[yir rffy]])].
+    apply AR2RW_inj in yy; subst y'.
+    eapply sb_order; eauto.
+    eapply irr; eauto.
+    apply (f_equal (@proj1_sig _ _)) in rfex.
+    assert (xrmw: IsRMW (`x)).
+      apply (f_equal (@proj1_sig _ _)) in rfex.
+      destruct x as [[[] (ev & rfw & fwf)] nf]; compute in ir, nf, rfw, rfex |- *.
+      1-4: try discriminate ir.
+      1-2: rewrite <- rfex in rfw; try discriminate (rfw eq_refl).
+      auto.
+    lapply (rmw_atomic (`x) (`x)).
+    intros (x' & x'' & [moxx imm] & <- & xx).
+    apply sig_ext in xx; subst x''.
+    eapply irr'; eauto.
+    repeat esplit; eauto.
+    apply (f_equal (@proj1_sig _ _)) in rfex.
+    assert (xrmw: IsRMW (` (AW2RW x'))).
+      destruct x' as [[[] (ev & rfw & fwf)] iw]; compute in ir, iw, rfw |- *.
+      1-4: try discriminate ir; try discriminate iw.
+      auto.
+    lapply (rmw_atomic (` (AW2RW e')) (` (AW2RW x'))).
+    intros (x'' & x''' & [moxx imm] & yy & xx).
+    assert (x'' = e').
+      destruct e'; apply sig_ext; auto.
+    assert (x''' = x').
+      destruct x'; apply sig_ext; auto.
+    subst x''' x''.
+    eapply irr'; eapply tra'; eauto.
+    repeat esplit; eauto.
+    destruct moef as (e' & x' & moef & <- & <-).
+    destruct x'; contradiction.
+    assert (xir = yir).
+      apply proof_irrelevance.
+    subst yir.
+    rewrite <- rffy in *.
+    subst f.
+    eapply irr; eauto.
+  
+  repeat esplit.
+
+  auto.
+
+  apply transitive_ct.
+
+  admit.
+
+  intros x y [sbxy locxy].
+  destruct (mo_total_order_per_loc (loc x)) as [_ tot].
+  assert (xrw: IsWrite (`x) \/ ~IsWrite (`x) /\ IsRead (`x)).
+    destruct x as [[[]]]; auto.
+    compute in n; contradiction.
+  assert (yrw: IsWrite (`y) \/ ~IsWrite (`y) /\ IsRead (`y)).
+    destruct y as [[[]]]; auto.
+    compute in n; contradiction.
+  destruct xrw as [xw|[xnw xr]], yrw as [yw|[ynw yr]].
+  left; left; left; right.
+  repeat esplit.
+  set (x' := exist (fun x => IsWrite x) (`x) xw).
+  set (y' := exist (fun x => IsWrite x) (`y) yw).
+  lapply (coherence_ww (`x) (`y)).
+  intros [hb_ex nmo_rev].
+  assert (mo x' y' \/ mo y' x').
+  apply tot.
+  1,2: unfold set_map, compose.
+  assert (xx: AW2RW x' = x).
+    apply sig_ext; auto.
+  rewrite xx; reflexivity.
+  assert (yy: AW2RW y' = y).
+    apply sig_ext; auto.
+  rewrite yy; assumption.
+  intros xy%(f_equal (@proj1_sig _ _)).
+  simpl in xy; apply sig_ext in xy.
+  subst y.
+  eapply sb_order.
+  eassumption.
+  destruct H.
+  eauto.
+  destruct nmo_rev.
+  repeat esplit.
+  apply H.
+  1,2: auto.
+  left; apply sbxy.
+  1,2: apply sig_ext; auto.
+  set (x' := exist (fun x => IsWrite x) (`x) xw).
+  set (y' := exist (fun x => IsRead x) (`y) yr).
+  destruct (classic (x = AW2RW (from y'))) as [xy|xy].
+  left; left; right; esplit.
+  apply sig_ext; apply sig_ext.
+  apply (f_equal (@proj1_sig _ _)) in xy.
+  apply (f_equal (@proj1_sig _ _)) in xy.
+  unfold y' in xy; destruct y as [[[]]]; try discriminate yr.
+  1,2: destruct x as [[[]]]; try discriminate xw.
+  1-4: compute in xy |- *; auto.
+  assert (mo x' (from y') \/ mo (from y') x').
+  apply tot; unfold set_map, compose.
+  assert (xx: AW2RW x' = x).
+    apply sig_ext; auto.
+  rewrite xx; auto.
+  assert (yy: AR2RW y' = y).
+    apply sig_ext; auto.
+  pose (yfeq := from_eq_loc y').
+  rewrite yy in yfeq.
+  rewrite <- yfeq; auto.
+  intros xyf; contradict xy.
+  apply sig_ext.
+  apply (f_equal (@proj1_sig _ _)) in xyf.
+  assumption.
+  destruct H.
+  econstructor 2; econstructor 1.
+  left; left; right; repeat esplit; eauto.
+  apply sig_ext; auto.
+  left; right; esplit.
+  apply sig_ext; apply sig_ext.
+  unfold y'; destruct y as [[]]; simpl.
+  apply from_eq.
+  destruct (coherence_wr (`x) (`y)).
+  left; auto.
+  contradict H1; repeat esplit.
+  apply H.
+  auto.
+  apply sig_ext; simpl; apply from_eq.
+  set (x' := exist (fun x => IsRead x) (`x) xr).
+  set (y' := exist (fun x => IsWrite x) (`y) yw).
+  assert (mo (from x') y' \/ mo y' (from x')).
+  apply tot; unfold set_map, compose.
+  assert (xx: AR2RW x' = x).
+    apply sig_ext; auto.
+  rewrite <- xx; apply from_eq_loc.
+  assert (yy: AW2RW y' = y).
+    apply sig_ext; auto.
+  rewrite yy; auto.
+  destruct (coherence_rf (`x) (`y)).
+  left; auto.
+  intros fxy; apply H0.
+  repeat esplit.
+  apply sig_ext.
+  apply (f_equal (@proj1_sig _ _)) in fxy.
+  apply (f_equal (@proj1_sig _ _)) in fxy.
+  simpl in fxy |- *.
+  rewrite <- fxy; apply from_eq.
+  destruct H.
+  left; right; repeat esplit.
+  auto.
+  match goal with |- ?G => assert (hg: mo (from x') y' = G) end.
+  f_equal.
+  do 2 apply sig_ext; apply from_eq.
+  rewrite <- hg; auto.
+  apply sig_ext; auto.
+  destruct (coherence_rw (`x) (`y)).
+  left; auto.
+  contradict H1; repeat esplit.
+  apply H.
+  auto.
+  apply sig_ext; simpl; apply from_eq.
+  set (x' := exist (fun x => IsRead x) (`x) xr).
+  set (y' := exist (fun x => IsRead x) (`y) yr).
+  destruct (classic (from x' = from y')).
+  left; left; left; left; esplit; esplit; esplit; esplit.
+  repeat esplit.
+  4: apply H.
+  1-5: auto.
+  1-2: apply sig_ext; auto.
+  assert (mo (from x') (from y') \/ mo (from y') (from x')).
+  apply tot; unfold set_map, compose.
+  assert (xx: AR2RW x' = x).
+    apply sig_ext; auto.
+  rewrite <- xx; apply from_eq_loc.
+  assert (yy: AR2RW y' = y).
+    apply sig_ext; auto.
+  rewrite locxy; rewrite <- yy; apply from_eq_loc.
+  auto.
+  destruct H0.
+  econstructor 2; econstructor 1.
+  right; repeat esplit; auto.
+  match goal with |- ?G => assert (xy: mo (from x') (from y') = G) end.
+  f_equal.
+  do 2 apply sig_ext; apply from_eq.
+  rewrite <- xy; auto.
+  left; right; repeat esplit.
+  do 2 apply sig_ext; apply from_eq.
+  destruct (coherence_rr x' y').
+  left; auto.
+  contradict H2; unfold map_rel; auto.
+
+  destruct H.
+  subst x; destruct y as [[[] (ev & rfw & fwf)]]; try discriminate x0.
+  1,2: destruct from0; try discriminate (rfw eq_refl); reflexivity.
+  left; left; right; auto.
+  destruct H as [ir H].
+  assert (xw: IsWrite (`x)).
+    subst x.
+    destruct y as [[[] (ev & rfw & fwf)]]; try discriminate ir.
+    1,2: destruct from0; try discriminate (rfw eq_refl); reflexivity.
+  set (x' := exist (fun x => IsWrite x) (`x) xw).
+  set (y' := exist (fun x => IsRead x) (`y) ir).
+  assert (y = AR2RW y').
+    apply sig_ext; auto.
+  assert (from (exist (fun o : Op => IsRead o)
+    (exist (fun o : Op' => OP_WF o) (` (` y)) (rf_obligation_1 y ir))
+    (rf_obligation_2 y ir)) = from y').
+    do 2 apply sig_ext; apply from_eq.
+  rewrite H1 in *.
+  rewrite H.
+  rewrite H0.
+  symmetry.
+  apply from_eq_loc.
+  intros z [[x' [[<- xw] scxz]] xzloc] [[z' [[<- zw] sczy]] zyloc].
+  set (x' := exist (fun x => IsWrite x) (`x) xw).
+  set (z' := exist (fun x => IsWrite x) (`z) zw).
+  destruct (mo_total_order_per_loc (loc x)) as [_ tot].
+  assert (mo x' z' \/ mo z' x').
+  apply tot; unfold set_map, compose.
+  assert (x = AW2RW x').
+    apply sig_ext; auto.
+  replace x; auto.
+  rewrite xzloc.
+  assert (z = AW2RW z').
+    apply sig_ext; auto.
+  replace z; auto.
+  intros [=]; apply sig_ext in H1.
+  subst z; eapply irr_scl; eauto.
+  eapply irr_scl.
+  destruct H0.
+  assert (IsRMW (`y) \/ ~IsWrite (`y)).
+    destruct y as [[[]]]; auto.
+    destruct H as [ir]; discriminate ir.
+  destruct H0.
+  assert (IsWrite (`y)).
+    destruct y as [[[]]]; try discriminate H0; auto.
+  set (y' := exist (fun x => IsWrite x) (`y) H1).
+  assert (mo z' y' \/ mo y' z').
+  apply tot; unfold set_map, compose.
+  rewrite xzloc.
+  assert (z = AW2RW z').
+    apply sig_ext; auto.
+  replace z; auto.
+  rewrite xzloc.
+  rewrite zyloc.
+  assert (y = AW2RW y').
+    apply sig_ext; auto.
+  replace y; auto.
+  intros [=]; apply sig_ext in H3.
+  subst y; eapply irr_scl; eauto.
+  destruct H2.
+  destruct (rmw_atomic (`x) (`y)) as (x'' & y'' & [moxy imm] & xx & yy).
+  esplit; esplit; esplit.
+  esplit; esplit.
+  apply H.
+  1-3: auto.
+  assert (`x = `x') by auto.
+  assert (`y = `y') by auto.
+  rewrite H3 in *.
+  rewrite H4 in *.
+  apply sig_ext in xx.
+  apply sig_ext in yy.
+  subst x'' y''.
+  exfalso; eapply imm.
+  apply m.
+  auto.
+  exfalso; eapply irr_scl.
+  econstructor 2.
+  apply sczy.
+  left; left; left; right; repeat esplit.
+  apply H2.
+  1,2: apply sig_ext; auto.
+  exfalso; eapply irr_scl.
+  econstructor 2.
+  apply sczy.
+  left; right; esplit; esplit; esplit.
+  auto.
+  auto.
+  esplit.
+  apply H.
+  repeat esplit.
+  apply m.
+  1,2: apply sig_ext; auto.
+  exfalso; eapply irr_scl.
+  econstructor 2.
+  apply scxz.
+  left; left; left; right.
+  repeat esplit.
+  apply m.
+  1,2: apply sig_ext; auto.
+Qed.
+
+(*
+SHB acyclic
+ - for writes, hb implies mo and mo is acyclic
+ - for reads
+   - cannot read from a write that it happens before
+   - cannot read from a non-immediate prior write
+   - if it 
+*)
+Lemma shb_acy: acyclic shb.
+Proof.
+  intros x rxx.
+Qed.
+
 
 (*
 SC:
@@ -618,9 +1183,9 @@ memory_order_seq_cst fences X and Y such that A is sequenced before X, Y is sequ
 precedes Y in S, then B observes either the effects of A or a later modification of M in its modification order.
 *)
 
-Conjecture sc_fence_1: rf ⊆ rf \ (`mo ⨾ `sc ⨾ ⦗IsFence⦘ ⨾ sb)%rel.
-Conjecture sc_fence_2: rf ⊆ rf \ (`mo ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `sc)%rel.
-Conjecture sc_fence_3: rf ⊆ rf \ (`mo ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `sc ⨾ ⦗IsFence⦘ ⨾ sb)%rel.
+Conjecture sc_fence_1: rf ⊆ rf \ (`mo ⨾ `sc ⨾ ⦗IsFence⦘ ⨾ sb ⨾ ⦗IsAtomic⦘)%rel.
+Conjecture sc_fence_2: rf ⊆ rf \ (`mo ⨾ ⦗IsAtomic⦘ ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `sc)%rel.
+Conjecture sc_fence_3: rf ⊆ rf \ (`mo ⨾ ⦗IsAtomic⦘ ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `sc ⨾ ⦗IsFence⦘ ⨾ sb ⨾ ⦗IsAtomic⦘)%rel.
 
 (*
 SC-Fence:
@@ -632,7 +1197,38 @@ M if:
 before B, and X precedes Y in S.
 *)
 
+Conjecture sc_fence_4: (`mo ⊆ `mo \ (⦗IsAtomic⦘ ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `sc)⁻¹)%rel.
+Conjecture sc_fence_5: (`mo ⊆ `mo \ (`sc ⨾ ⦗IsFence⦘ ⨾ sb ⨾ ⦗IsAtomic⦘)⁻¹)%rel.
+Conjecture sc_fence_6: (`mo ⊆ `mo \ (⦗IsAtomic⦘ ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `sc ⨾ ⦗IsFence⦘ ⨾ sb ⨾ ⦗IsAtomic⦘)⁻¹)%rel.
 
+(*
+RACE:
+Two actions are potentially concurrent if
+ — they are performed by different threads, or
+ — they are unsequenced, at least one is performed by a signal handler, and they are not both performed
+by the same signal handler invocation.
+
+Two expression evaluations conflict if one of them modifies a memory location (4.4) and the other one reads
+or modifies the same memory location.
+
+If a side effect on a memory location (4.4) is unsequenced relative to either another side effect on the same
+memory location or a value computation using the value of any object in the same memory location, and they are
+not potentially concurrent, the behavior is undefined
+
+The execution of a program contains a data race if it contains two potentially concurrent conflicting actions ,
+at least one of which is not atomic, and neither happens before the other, except for the special case for
+signal handlers described below. Any such data race results in undefined behavior.
+*)
+
+Conjecture race_free:
+  forall
+    (x y: ReadWrite),
+    loc x = loc y ->
+    IsWrite x \/ IsWrite y ->
+    thread x = thread y /\ sb^⋈? x y \/
+    thread x <> thread y /\ (~IsAtomic x \/ ~IsAtomic y) /\ hb^⋈? x y.
+    (*same thread /\ ~sb_sym x y,
+      diff thread /\ (~IsAtomic x \/ ~IsAtomic y) /\ ~hb_sym x y.*)
 
 (*
 [ Note: memory_order_seq_cst ensures sequential consistency only for a program that is free of data races
@@ -655,36 +1251,15 @@ that operations on ordinary objects are not visibly reordered. This is not actua
 races, but it is necessary to ensure that data races, as defined below, and with suitable restrictions on the use
 of atomics, correspond to data races in a simple interleaved (sequentially consistent ) execution. —end note ]
 
-SC-PER-LOC:
-[ Note: The four preceding coherence requirements effectively disallow compiler reordering of atomic operations
-to a single object, even if both operations are relaxed loads. This effectively makes the cache coherence
-guarantee provided by most hardware available to C++ atomic operations. — end note ]
+
 
 [ Note: The value observed by a load of an atomic depends on the “happens before” relation, which depends
 on the values observed by loads of atomics. The intended reading is that there must exist an association of
 atomic loads with modifications they observe that, together with suitably chosen modification orders and
 the “happens before” relation derived as described above, satisfy the resulting constraints as imposed here.
 — end note ]
-
 *)
-(*
-RACE:
-If a side effect on a memory location (4. 4) is unsequenced relative to either another side effect on the same memory location or a
-value computation using the value of any object in the same memory location, and they are not potentially
-concurrent, the behavior is undefined
 
-Two expression evaluations conflict if one of them modifies a memory location (4. 4) and the other one reads
-or modifies the same memory location.
-
-Two actions are potentially concurrent if
- — they are performed by different threads, or
- — they are unsequenced, at least one is performed by a signal handler, and they are not both performed
-by the same signal handler invocation.
-
-The execution of a program contains a data race if it contains two potentially concurrent conflicting actions ,
-at least one of which is not atomic, and neither happens before the other, except for the special case for
-signal handlers described below. Any such data race results in undefined behavior.
-*)
 
 (*
 A conforming implementation executing a well-formed program shall produce the same observable behavior as
@@ -704,32 +1279,6 @@ These collectively are referred to as the observable behavior of the program.
 The value of an object visible to a thread T at a particular point is the initial value of the object, a value
 assigned to the object by T, or a value assigned to the object by another thread, according to the rules
 below.
-
-
-CD:
-An evaluation A carries a dependency to an evaluation B if
- — the value of A is used as an operand of B, unless :
-   — B is an invocation of any specialization of std: : kill_dependency (32. 4), or
-   — A is the left operand of a built - in logical AND (&&, see 8. 1 4) or logical OR ( | |, see 8. 1 5) operator, or
-   — A is the left operand of a conditional (? :, see 8. 1 6) operator, or
-   — A is the left operand of the built - in comma (, ) operator (8. 1 9) ;
-or
- — A writes a scalar object or bit-field M, B reads the value written by A from M, and A is sequenced
-before B, or
- — for some evaluation X, A carries a dependency to X, and X carries a dependency to B.
-[ Note: “Carries a dependency to” is a subset of “ is sequenced before”, and is similarly strictly intra- thread.
-— end note ]
-
-DOB:
-An evaluation A is dependency-ordered before an evaluation B if
- — A performs a release operation on an atomic object M, and, in another thread, B performs a consume
-operation on M and reads a value written by any side effect in the release sequence headed by A, or
- — for some evaluation X, A is dependency-ordered before X and X carries a dependency to B.
-[ Note: The relation “ is dependency-ordered before” is analogous to “ synchronizes with”, but uses release/ -
-consume in place of release/acquire. — end note ]
-
-
-
 
 DRF:
 [ Note: It can be shown
