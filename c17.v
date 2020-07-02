@@ -644,6 +644,37 @@ location immediately previous.
 
 *)
 
+Lemma rw_finite: set_finite (A:=ReadWrite) set_full.
+  destruct events'_finite as [findom inl].
+  pose (fd := findom).
+  assert (exists fdrw: list ReadWrite, forall x, In (``x) fd -> In x fdrw).
+    induction fd.
+    exists [].
+    simpl; auto.
+    destruct IHfd as [fdrwp inp].
+    destruct (classic (exists a': ReadWrite, (``a') = a)) as [[a' aeq]|].
+    exists (a' :: fdrwp).
+    intros x [xa|xna].
+    left.
+    subst a; do 2 apply sig_ext.
+    auto.
+    right.
+    eapply inp; auto.
+    exists fdrwp.
+    intros x [xa|xna].
+    contradict H.
+    exists x.
+    auto.
+    apply inp.
+    auto.
+  destruct H as [fdrw infd].
+  exists fdrw.
+  intros x _.
+  apply infd.
+  apply inl.
+  destruct x as [[[] (ev & rfw & fwf)]]; apply ev.
+Qed.
+
 Lemma sc_per_loc:
   exists scl: relation ReadWrite,
     (forall l, strict_total_order (loc ↓₁ (eq l)) scl) /\
@@ -665,7 +696,21 @@ Proof.
   pose (rb := (⦗`↓₁ set_compl IsWrite⦘ ⨾ rf⁻¹ ⨾ AW2RW ↑ mo)).
   pose (sb_sibling_reads := AR2RW ↑ restr_eq_rel from (`↓ restr_rel (set_compl IsWrite) sb)).
   pose (scl := (sb_sibling_reads ∪ AW2RW ↑ mo ∪ rf ∪ rb)⁺).
-  exists scl.
+
+  pose (eqb_loc l := fun rw => Nat.eqb (loc rw) l).
+  destruct (rw_finite) as [rwdom inrwdom].
+  pose (rwdom_by_l l :=
+    fold_right
+      (fun (x: ReadWrite)
+           (t: list {o: ReadWrite | loc o = l }) =>
+         match PeanoNat.Nat.eq_dec (loc x) l
+         with
+           left e => (exist _ x e) :: t
+         | right ne => t
+         end) [] rwdom).
+  pose (sclt := ⋃ l, `↑ tot_ext (rwdom_by_l l) (`↓ scl)).
+
+  exists sclt.
 
   assert (rf_mo: forall x y, IsWrite (`y) -> (AW2RW ↑ mo ∪ (AW2RW ↑ mo)^? ⨾ rf) x y -> (AW2RW ↑ mo) x y).
     intros x y wy [moxy|(e & [->|moex] & [yr rfex])].
@@ -884,14 +929,113 @@ Proof.
     rewrite <- rffy in *.
     subst f.
     eapply irr; eauto.
-  
-  repeat esplit.
 
+  (*
+  assert (tra_sclp: forall P, transitive (proj1_sig (P:=P) ↓ scl)).
+    intros P x y z rxy ryz.
+    esplit.
+    apply sig_ext.
+  *)
+
+  (*
+  assert (tra_sclloc: forall l, transitive (restr_rel (loc ↓₁ eq l) scl)).
+    intros l x y z [rxy [xloc yloc]] [ryz [_ zloc]].
+    esplit; auto.
+    eapply transitive_ct; eauto.
+
+  assert (scrt_loc: forall l x y dom,
+    tot_ext (filter (eqb_loc l) dom) (restr_rel (loc ↓₁ eq l) scl) x y ->
+    loc x = l).
+    intros l x y dom rxy.
+    revert x y rxy.
+    induction dom.
+    intros x y rxy.
+    simpl in rxy.
+    apply -> clos_trans_of_transitive in rxy; auto.
+    destruct rxy as [rxy [xloc yloc]]; auto.
+    intros x y rxy.
+    simpl in rxy.
+    destruct (eqb_loc l a) eqn:aeq.
+    simpl in rxy.
+    destruct rxy as [rxy|[rxa rnya]].
+    apply (IHdom x y).
+    apply clos_trans_of_transitive; auto.
+    apply tot_ext_trans.
+    apply clos_refl_transE in rxa as [<-|rxa].
+    apply PeanoNat.Nat.eqb_eq in aeq; auto.
+    eapply IHdom.
+    eapply clos_trans_of_transitive; eauto.
+    apply tot_ext_trans.
+    eapply IHdom; eauto.
+  *)
+
+  do 2 esplit.
+  esplit.
+  5: repeat esplit.
+
+  intros x [l' [_ (x' & x'' & rxx & xx & <-)]].
+  apply sig_ext in xx; subst x''.
+  revert rxx.
+  apply tot_ext_irr.
+  intros x rxx.
+  apply -> clos_trans_of_transitive in rxx.
+  eapply irr_scl; eauto.
+  intros e f g; apply transitive_ct.
+
+  intros x y z rxy ryz.
+  unfold sclt in *.
+  clear sclt inrwdom.
+  destruct
+    rxy as [lx [_ (x' & y' & rxy & <- & <-)]],
+    ryz as [ly [_ (y'' & z' & ryz & yy & <-)]].
+  assert (lx = ly).
+    destruct y', y''.
+    simpl in yy.
+    subst x0.
+    clear rxy.
+    rewrite e0 in e.
+    auto.
+  subst ly.
+  apply sig_ext in yy.
+  subst y''.
+  exists lx; split; auto.
+  revert z' rxy ryz.
+  induction (rwdom_by_l lx) as [|elem rwdoml IHrwdom].
+  intros z' rxy ryz.
+  simpl in rxy, ryz |- *.  
+  repeat esplit.
+  econstructor 2; eauto.
+  intros z' rxy ryz.
+  simpl in rxy, ryz |- *.
+  destruct rxy as [rxy|[rxelem rnyelem]], ryz as [ryz|[ryelem rnzelem]].
+
+  repeat esplit.
+  left; apply clos_trans_of_transitive; [apply tot_ext_trans|].
+  apply -> clos_trans_of_transitive in rxy; [|apply tot_ext_trans].
+  apply -> clos_trans_of_transitive in ryz; [|apply tot_ext_trans].
+  edestruct IHrwdom; eauto.
+  eapply tot_ext_trans; eauto.
+
+  repeat esplit.
+  right; split.
+  econstructor 3; eauto.
+  apply clos_refl_transE; eauto.
   auto.
 
-  apply transitive_ct.
+  repeat esplit.
+  right; split.
+  auto.
+  intros rnzelem.
+  contradict rnyelem.
+  econstructor 3; eauto.
+  apply clos_refl_transE; eauto.
 
-  admit.
+  repeat esplit.
+  right; split; eauto.
+
+  intros x xloc y yloc nxy.
+  edestruct (tot_ext_total (rwdom_by_l l) (`↓ scl)).
+  4: {}
 
   intros x y [sbxy locxy].
   destruct (mo_total_order_per_loc (loc x)) as [_ tot].
