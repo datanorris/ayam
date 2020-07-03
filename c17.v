@@ -969,75 +969,83 @@ Proof.
     eapply IHdom; eauto.
   *)
 
+  assert (irr_sclt: irreflexive sclt).
+    intros x [l' [_ (x' & x'' & rxx & xx & <-)]].
+    apply sig_ext in xx; subst x''.
+    revert rxx.
+    apply tot_ext_irr.
+    intros x rxx.
+    apply -> clos_trans_of_transitive in rxx.
+    eapply irr_scl; eauto.
+    intros e f g; apply transitive_ct.
+
+  assert (tra_sclt: transitive sclt).
+    intros x y z rxy ryz.
+    unfold sclt in *.
+    clear sclt inrwdom.
+    destruct
+      rxy as [lx [_ (x' & y' & rxy & <- & <-)]],
+      ryz as [ly [_ (y'' & z' & ryz & yy & <-)]].
+    assert (lx = ly).
+      destruct y', y''.
+      simpl in yy.
+      subst x0.
+      clear rxy.
+      rewrite e0 in e.
+      auto.
+    subst ly.
+    apply sig_ext in yy.
+    subst y''.
+    exists lx; split; auto.
+    repeat esplit.
+    eapply tot_ext_trans; eauto.
+
   do 2 esplit.
   esplit.
-  5: repeat esplit.
 
-  intros x [l' [_ (x' & x'' & rxx & xx & <-)]].
-  apply sig_ext in xx; subst x''.
-  revert rxx.
-  apply tot_ext_irr.
-  intros x rxx.
-  apply -> clos_trans_of_transitive in rxx.
-  eapply irr_scl; eauto.
-  intros e f g; apply transitive_ct.
-
-  intros x y z rxy ryz.
-  unfold sclt in *.
-  clear sclt inrwdom.
-  destruct
-    rxy as [lx [_ (x' & y' & rxy & <- & <-)]],
-    ryz as [ly [_ (y'' & z' & ryz & yy & <-)]].
-  assert (lx = ly).
-    destruct y', y''.
-    simpl in yy.
-    subst x0.
-    clear rxy.
-    rewrite e0 in e.
-    auto.
-  subst ly.
-  apply sig_ext in yy.
-  subst y''.
-  exists lx; split; auto.
-  revert z' rxy ryz.
-  induction (rwdom_by_l lx) as [|elem rwdoml IHrwdom].
-  intros z' rxy ryz.
-  simpl in rxy, ryz |- *.  
-  repeat esplit.
-  econstructor 2; eauto.
-  intros z' rxy ryz.
-  simpl in rxy, ryz |- *.
-  destruct rxy as [rxy|[rxelem rnyelem]], ryz as [ryz|[ryelem rnzelem]].
-
-  repeat esplit.
-  left; apply clos_trans_of_transitive; [apply tot_ext_trans|].
-  apply -> clos_trans_of_transitive in rxy; [|apply tot_ext_trans].
-  apply -> clos_trans_of_transitive in ryz; [|apply tot_ext_trans].
-  edestruct IHrwdom; eauto.
-  eapply tot_ext_trans; eauto.
-
-  repeat esplit.
-  right; split.
-  econstructor 3; eauto.
-  apply clos_refl_transE; eauto.
   auto.
 
-  repeat esplit.
-  right; split.
   auto.
-  intros rnzelem.
-  contradict rnyelem.
-  econstructor 3; eauto.
-  apply clos_refl_transE; eauto.
-
-  repeat esplit.
-  right; split; eauto.
 
   intros x xloc y yloc nxy.
-  edestruct (tot_ext_total (rwdom_by_l l) (`↓ scl)).
-  4: {}
+  pose (x' := exist (fun x => loc x = l) x (eq_sym xloc)).
+  pose (y' := exist (fun x => loc x = l) y (eq_sym yloc)).
+  assert (x' <> y').
+    intros nxy'.
+    contradict nxy.
+    apply (f_equal (@proj1_sig _ _)) in nxy'.
+    simpl in nxy'.
+    assumption.
+  specialize (inrwdom x I) as inx.
+  specialize (inrwdom y I) as iny.
+  clear inrwdom irr_sclt tra_sclt.
+  edestruct (tot_ext_total (rwdom_by_l l) (`↓ scl)); eauto.
+  1,2: unfold rwdom_by_l.
+  clear iny; induction rwdom; [contradiction|].
+  2:clear inx; induction rwdom; [contradiction|].
+  1,2: simpl in IHrwdom |- *.
+  destruct (PeanoNat.Nat.eq_dec (loc a) l), inx as [->|inx].
+  left; apply sig_ext; auto.
+  right; apply IHrwdom; auto.
+  destruct x'; contradict n; auto.
+  apply IHrwdom; auto.
+  destruct (PeanoNat.Nat.eq_dec (loc a) l), iny as [->|iny].
+  left; apply sig_ext; auto.
+  right; apply IHrwdom; auto.
+  destruct x'; contradict n; auto.
+  apply IHrwdom; auto.
+  left; repeat esplit; eauto.
+  right; repeat esplit; eauto.
 
   intros x y [sbxy locxy].
+  pose (x' := exist (fun o => loc o = loc x) x eq_refl).
+  pose (y' := exist (fun o => loc o = loc x) y (eq_sym locxy)).
+  exists (loc x); split; auto.
+  exists x', y'.
+  repeat split; auto.
+  apply tot_ext_extends.
+  unfold map_rel; simpl.
+  clear x' y'.
   destruct (mo_total_order_per_loc (loc x)) as [_ tot].
   assert (xrw: IsWrite (`x) \/ ~IsWrite (`x) /\ IsRead (`x)).
     destruct x as [[[]]]; auto.
@@ -1175,105 +1183,133 @@ Proof.
   left; auto.
   contradict H2; unfold map_rel; auto.
 
-  destruct H.
-  subst x; destruct y as [[[] (ev & rfw & fwf)]]; try discriminate x0.
-  1,2: destruct from0; try discriminate (rfw eq_refl); reflexivity.
-  left; left; right; auto.
-  destruct H as [ir H].
+  intros x y [yr rfxy].
   assert (xw: IsWrite (`x)).
     subst x.
-    destruct y as [[[] (ev & rfw & fwf)]]; try discriminate ir.
-    1,2: destruct from0; try discriminate (rfw eq_refl); reflexivity.
-  set (x' := exist (fun x => IsWrite x) (`x) xw).
-  set (y' := exist (fun x => IsRead x) (`y) ir).
-  assert (y = AR2RW y').
-    apply sig_ext; auto.
-  assert (from (exist (fun o : Op => IsRead o)
-    (exist (fun o : Op' => OP_WF o) (` (` y)) (rf_obligation_1 y ir))
-    (rf_obligation_2 y ir)) = from y').
-    do 2 apply sig_ext; apply from_eq.
-  rewrite H1 in *.
-  rewrite H.
-  rewrite H0.
-  symmetry.
-  apply from_eq_loc.
-  intros z [[x' [[<- xw] scxz]] xzloc] [[z' [[<- zw] sczy]] zyloc].
-  set (x' := exist (fun x => IsWrite x) (`x) xw).
-  set (z' := exist (fun x => IsWrite x) (`z) zw).
+    destruct y as [[[] (ev & rfw & fwf)]]; try discriminate yr.
+    1,2: destruct from0; try discriminate (rfw eq_refl).
+    1-4: reflexivity.
+  assert (locxy: loc x = loc y).
+    pose (y'r := exist (fun o => IsRead o) (`y) yr).
+    assert (y = AR2RW y'r).
+      apply sig_ext; auto.
+    assert (
+      exist (fun o : Op => IsRead o)
+        (exist (fun o : Op' => OP_WF o)
+          (` (` y))
+          (rf_obligation_1 y yr))
+        (rf_obligation_2 y yr) = y'r).
+      do 2 apply sig_ext; auto.
+    rewrite H0 in *.
+    subst x.
+    replace y.
+    symmetry.
+    apply from_eq_loc.
+  pose (x' := exist (fun o => loc o = loc x) x eq_refl).
+  pose (y' := exist (fun o => loc o = loc x) y (eq_sym locxy)).
+  esplit; try esplit.
+  do 2 esplit.
+  esplit; eauto.
+  exists (loc x); split; auto.
+  exists x', y'; repeat esplit; eauto.
+  apply tot_ext_extends.
+  left; left; right; esplit; eauto.
+  auto.
+  intros z [[x'' [[<- _] scxz]] xzloc] [[z'' [[<- zw] sczy]] zyloc].
+  set (x'w := exist (fun x => IsWrite x) (`x) xw).
+  set (z' := exist (fun o => loc o = loc x) z (eq_sym xzloc)).
+  set (z'w := exist (fun x => IsWrite x) (`z) zw).
   destruct (mo_total_order_per_loc (loc x)) as [_ tot].
-  assert (mo x' z' \/ mo z' x').
+  assert (mo x'w z'w \/ mo z'w x'w).
   apply tot; unfold set_map, compose.
-  assert (x = AW2RW x').
+  assert (x = AW2RW x'w).
     apply sig_ext; auto.
   replace x; auto.
   rewrite xzloc.
-  assert (z = AW2RW z').
+  assert (z = AW2RW z'w).
     apply sig_ext; auto.
   replace z; auto.
-  intros [=]; apply sig_ext in H1.
-  subst z; eapply irr_scl; eauto.
-  eapply irr_scl.
-  destruct H0.
+  intros [=xz]; apply sig_ext in xz.
+  subst z; eapply irr_sclt; eauto.
+  eapply irr_sclt.
+  destruct H.
   assert (IsRMW (`y) \/ ~IsWrite (`y)).
     destruct y as [[[]]]; auto.
-    destruct H as [ir]; discriminate ir.
-  destruct H0.
+  destruct H.
   assert (IsWrite (`y)).
     destruct y as [[[]]]; try discriminate H0; auto.
-  set (y' := exist (fun x => IsWrite x) (`y) H1).
-  assert (mo z' y' \/ mo y' z').
+  set (y'w := exist (fun x => IsWrite x) (`y) H0).
+  assert (mo z'w y'w \/ mo y'w z'w).
   apply tot; unfold set_map, compose.
   rewrite xzloc.
-  assert (z = AW2RW z').
+  assert (z = AW2RW z'w).
     apply sig_ext; auto.
   replace z; auto.
   rewrite xzloc.
   rewrite zyloc.
-  assert (y = AW2RW y').
+  assert (y = AW2RW y'w).
     apply sig_ext; auto.
   replace y; auto.
-  intros [=]; apply sig_ext in H3.
-  subst y; eapply irr_scl; eauto.
-  destruct H2.
+  intros [=zy]; apply sig_ext in zy.
+  subst y; eapply irr_sclt; eauto.
+  destruct H1.
   destruct (rmw_atomic (`x) (`y)) as (x'' & y'' & [moxy imm] & xx & yy).
   esplit; esplit; esplit.
-  esplit; esplit.
-  apply H.
-  1-3: auto.
-  assert (`x = `x') by auto.
-  assert (`y = `y') by auto.
-  rewrite H3 in *.
-  rewrite H4 in *.
+  esplit; esplit; esplit.
+  apply rfxy.
+  1-4: auto.
+  assert (xx2: `x = `x'w) by auto.
+  assert (yy2: `y = `y'w) by auto.
+  rewrite xx2 in *.
+  rewrite yy2 in *.
   apply sig_ext in xx.
   apply sig_ext in yy.
   subst x'' y''.
   exfalso; eapply imm.
   apply m.
   auto.
-  exfalso; eapply irr_scl.
-  econstructor 2.
+  exfalso; eapply irr_sclt.
+  eapply tra_sclt.
   apply sczy.
+  exists (loc x); split; auto.
+  exists y', z'.
+  repeat esplit.
+  eapply tot_ext_extends.
   left; left; left; right; repeat esplit.
-  apply H2.
+  apply H1.
   1,2: apply sig_ext; auto.
-  exfalso; eapply irr_scl.
-  econstructor 2.
+  exfalso; eapply irr_sclt.
+  eapply tra_sclt.
   apply sczy.
+  exists (loc x); split; auto.
+  exists y', z'.
+  repeat esplit.
+  apply tot_ext_extends.
   left; right; esplit; esplit; esplit.
   auto.
   auto.
   esplit.
-  apply H.
+  esplit.
+  apply rfxy.
+  exists x'w, z'w.
   repeat esplit.
   apply m.
   1,2: apply sig_ext; auto.
-  exfalso; eapply irr_scl.
-  econstructor 2.
+  exfalso; eapply irr_sclt.
+  eapply tra_sclt.
   apply scxz.
+  exists (loc x); split; auto.
+  exists z', x'.
+  repeat eexists.
+  eapply tot_ext_extends.
   left; left; left; right.
   repeat esplit.
   apply m.
   1,2: apply sig_ext; auto.
+Grab Existential Variables.
+  all: auto.
+  destruct x'; auto.
+  all: destruct z'; auto.
 Qed.
 
 (*
