@@ -733,6 +733,13 @@ Proof.
      (AW2RW ↑ mo)^? ⨾ rf) ∪
     rb ⨾ rf^?).
   assert (to_b: scl ⊆ sclb).
+    assert (rweq: forall x, ` (AR2RW x) = `x).
+      intros []; simpl; reflexivity.
+    assert (req: forall (x: Read) xwf xr, exist _ (exist _ (`` (AR2RW x)) xwf) xr = x).
+      intros e ewf er.
+      do 2 apply sig_ext; simpl.
+      rewrite (rweq e).
+      reflexivity.
     intros x y rxy.
     induction rxy as [x y [[[sbxy|moxy]|rfxy]|rbxy]|].
     left; left; auto.
@@ -784,14 +791,14 @@ Proof.
          (g & [<-|moyg] & rfgz)]]|
        (g & (y' & [<- nwg] & rbyg) & rfgz)].
     destruct y'; contradiction.
-    1-4: esplit; esplit; [esplit; esplit; esplit; auto; esplit; [eauto|]|].
+    1-3: esplit; esplit; [esplit; esplit; esplit; auto; esplit; [eauto|]|].
     2: left; auto.
     eapply tra; eauto.
     2: eauto.
     auto.
     2: eauto.
     eapply tra; eauto.
-    1,2: contradiction.
+    contradiction.
     destruct IHrxy2 as
       [[(y' & z' & [(sbyz & ynw & znw) fyz] & <- & <-)|
         [([e eiw] & f & moef & <- & <-)|
@@ -815,15 +822,12 @@ Proof.
     destruct y' as [y'], y'' as [y'']; simpl in yy; subst y''; contradiction.
     left; right; right; esplit; esplit.
     eauto.
-    esplit.
-    apply sig_ext; apply sig_ext; simpl.
-    apply (f_equal (@proj1_sig _ _)) in rffy.
-    apply (f_equal (@proj1_sig _ _)) in rffy.
-    apply (f_equal (@proj1_sig _ _)) in fyz.
-    apply (f_equal (@proj1_sig _ _)) in fyz.
-    destruct y' as [[[]]]; destruct z' as [[[]]]; compute in rffy, fyz |- *;
-      try discriminate ir; try contradiction.
-    subst from0; auto.
+    unshelve esplit.
+      destruct z'; auto.
+    rewrite (req z').
+    rewrite <- fyz.
+    rewrite (req y') in rffy.
+    auto.
     destruct moef as (e' & y'' & moef & <- & yy).
     apply (f_equal (@proj1_sig _ _)) in yy.
     destruct y' as [y'], y'' as [y'']; simpl in yy; subst y''; contradiction.
@@ -831,15 +835,12 @@ Proof.
     esplit; esplit; esplit; auto.
     eauto.
     right.
-    esplit.
-    apply sig_ext; apply sig_ext; simpl.
-    apply (f_equal (@proj1_sig _ _)) in rffy.
-    apply (f_equal (@proj1_sig _ _)) in rffy.
-    apply (f_equal (@proj1_sig _ _)) in fyz.
-    apply (f_equal (@proj1_sig _ _)) in fyz.
-    destruct y' as [[[]]]; destruct z' as [[[]]]; compute in rffy, fyz |- *;
-      try discriminate ir; try contradiction.
-    subst from0; auto.
+    unshelve esplit.
+      destruct z'; auto.
+    rewrite (req z').
+    rewrite <- fyz.
+    rewrite (req y') in rffy.
+    auto.
     simpl in ir; contradiction.
     destruct z as [[[] (ev & rfw & fwf)] znf]; try discriminate zir.
     1-2: apply (f_equal (@proj1_sig _ _)) in rfgz; rewrite rfgz in *.
@@ -860,15 +861,12 @@ Proof.
     destruct x'; auto.
     esplit.
     2: eauto.
-    esplit.
-    apply sig_ext; apply sig_ext; simpl.
-    apply (f_equal (@proj1_sig _ _)) in rfhy.
-    apply (f_equal (@proj1_sig _ _)) in rfhy.
-    apply (f_equal (@proj1_sig _ _)) in fxy.
-    apply (f_equal (@proj1_sig _ _)) in fxy.
-    destruct x' as [[[]]]; destruct y' as [[[]]]; compute in rfhy, fxy |- *;
-      try discriminate ir; try contradiction.
-    subst from0; auto.
+    unshelve esplit.
+      destruct x'; auto.
+    rewrite (req x').
+    rewrite fxy.
+    rewrite (req y') in rfhy.
+    auto.
     3: destruct moef as (e' & y' & moey & <- & <-).
     1,3: destruct y'; contradiction.
     1,2: assert (H: yir = yir2); [apply proof_irrelevance|].
@@ -883,7 +881,7 @@ Proof.
     3-5: eauto.
     1,2: destruct moxf; [subst f; auto|eapply tra; eauto].
     esplit; esplit; esplit; eauto.
-  
+
   all: assert (irr_scl: irreflexive scl).
     intros x rxy.
     apply to_b in rxy.
@@ -929,7 +927,6 @@ Proof.
     rewrite <- rffy in *.
     subst f.
     eapply irr; eauto.
-
   (*
   assert (tra_sclp: forall P, transitive (proj1_sig (P:=P) ↓ scl)).
     intros P x y z rxy ryz.
@@ -1085,7 +1082,8 @@ Proof.
   set (x' := exist (fun x => IsWrite x) (`x) xw).
   set (y' := exist (fun x => IsRead x) (`y) yr).
   destruct (classic (x = AW2RW (from y'))) as [xy|xy].
-  left; left; right; esplit.
+  left; left; right.
+  exists yr.
   apply sig_ext; apply sig_ext.
   apply (f_equal (@proj1_sig _ _)) in xy.
   apply (f_equal (@proj1_sig _ _)) in xy.
@@ -1110,7 +1108,7 @@ Proof.
   econstructor 2; econstructor 1.
   left; left; right; repeat esplit; eauto.
   apply sig_ext; auto.
-  left; right; esplit.
+  left; right; exists yr.
   apply sig_ext; apply sig_ext.
   unfold y'; destruct y as [[]]; simpl.
   apply from_eq.
@@ -1119,6 +1117,7 @@ Proof.
   contradict H1; repeat esplit.
   apply H.
   auto.
+  instantiate (1 := yr).
   apply sig_ext; simpl; apply from_eq.
   set (x' := exist (fun x => IsRead x) (`x) xr).
   set (y' := exist (fun x => IsWrite x) (`y) yw).
@@ -1133,7 +1132,7 @@ Proof.
   destruct (coherence_rf (`x) (`y)).
   left; auto.
   intros fxy; apply H0.
-  repeat esplit.
+  repeat esplit; instantiate (1 := xr).
   apply sig_ext.
   apply (f_equal (@proj1_sig _ _)) in fxy.
   apply (f_equal (@proj1_sig _ _)) in fxy.
@@ -1142,6 +1141,7 @@ Proof.
   destruct H.
   left; right; repeat esplit.
   auto.
+  instantiate (2 := xr).
   match goal with |- ?G => assert (hg: mo (from x') y' = G) end.
   f_equal.
   do 2 apply sig_ext; apply from_eq.
@@ -1152,6 +1152,7 @@ Proof.
   contradict H1; repeat esplit.
   apply H.
   auto.
+  instantiate (1 := xr).
   apply sig_ext; simpl; apply from_eq.
   set (x' := exist (fun x => IsRead x) (`x) xr).
   set (y' := exist (fun x => IsRead x) (`y) yr).
@@ -1176,8 +1177,10 @@ Proof.
   match goal with |- ?G => assert (xy: mo (from x') (from y') = G) end.
   f_equal.
   do 2 apply sig_ext; apply from_eq.
+  instantiate (1 := xr).
   rewrite <- xy; auto.
   left; right; repeat esplit.
+  instantiate (1 := yr).
   do 2 apply sig_ext; apply from_eq.
   destruct (coherence_rr x' y').
   left; auto.
@@ -1231,14 +1234,13 @@ Proof.
   replace z; auto.
   intros [=xz]; apply sig_ext in xz.
   subst z; eapply irr_sclt; eauto.
-  eapply irr_sclt.
   destruct H.
   assert (IsRMW (`y) \/ ~IsWrite (`y)).
     destruct y as [[[]]]; auto.
-  destruct H.
+  destruct H0.
   assert (IsWrite (`y)).
     destruct y as [[[]]]; try discriminate H0; auto.
-  set (y'w := exist (fun x => IsWrite x) (`y) H0).
+  set (y'w := exist (fun x => IsWrite x) (`y) H1).
   assert (mo z'w y'w \/ mo y'w z'w).
   apply tot; unfold set_map, compose.
   rewrite xzloc.
@@ -1252,7 +1254,7 @@ Proof.
   replace y; auto.
   intros [=zy]; apply sig_ext in zy.
   subst y; eapply irr_sclt; eauto.
-  destruct H1.
+  destruct H2.
   destruct (rmw_atomic (`x) (`y)) as (x'' & y'' & [moxy imm] & xx & yy).
   esplit; esplit; esplit.
   esplit; esplit; esplit.
@@ -1266,7 +1268,7 @@ Proof.
   apply sig_ext in yy.
   subst x'' y''.
   exfalso; eapply imm.
-  apply m.
+  apply H.
   auto.
   exfalso; eapply irr_sclt.
   eapply tra_sclt.
@@ -1276,7 +1278,7 @@ Proof.
   repeat esplit.
   eapply tot_ext_extends.
   left; left; left; right; repeat esplit.
-  apply H1.
+  apply H2.
   1,2: apply sig_ext; auto.
   exfalso; eapply irr_sclt.
   eapply tra_sclt.
@@ -1293,7 +1295,7 @@ Proof.
   apply rfxy.
   exists x'w, z'w.
   repeat esplit.
-  apply m.
+  apply H.
   1,2: apply sig_ext; auto.
   exfalso; eapply irr_sclt.
   eapply tra_sclt.
@@ -1304,27 +1306,168 @@ Proof.
   eapply tot_ext_extends.
   left; left; left; right.
   repeat esplit.
-  apply m.
+  apply H.
   1,2: apply sig_ext; auto.
-Grab Existential Variables.
-  all: auto.
-  destruct x'; auto.
-  all: destruct z'; auto.
 Qed.
 
 (*
 SHB acyclic
- - for writes, hb implies mo and mo is acyclic
- - for reads
-   - cannot read from a write that it happens before
-   - cannot read from a non-immediate prior write
-   - if it 
+- sb is acyclic
+- sw joins threads with certain mo* ⨾ rf release sequence
+  - release sequence is a subset of sb* ⨾ rmw* ⨾ rf
+  - the first rmw* happens after all previous things (sb ⊆ shb)
+  - the subsequent rmw* must not happen before the first write (coherence_ww)
+  - the read must not happen before the last rmw* (coherence_rf)
+  - the read must not happen before the first rmw (coherence_rw)
+  - the last element of sw must not happen before the first element (sb ⊆ shb)
+  - any later writes to the same location in shb:
+    - must not happen before the first rmw* (coherence_ww)
+    - must not happen before any rmw* (rmw_atomic)
 *)
+
 Lemma shb_acy: acyclic shb.
 Proof.
-  intros x rxx.
+  assert (shbb: shb ≡ (sb ∪ (sb^? ⨾ sw ⨾ sb^?)⁺)); [split|].
+    {
+      intros x y rxy.
+      induction rxy as
+        [x y [sbxy|swhb]|
+          x y z
+            rxy [sbxy|(e & [->|itfy]%clos_refl_transE & (e' & [<-|sbxe] & e'' & swee' & [->|sbee'']))%t_rt_step]
+            ryz [sbyz|(f & (f' & [<-|sbyf] & f'' & swff' & [->|sbff'']) & [->|itfz]%clos_refl_transE)%t_step_rt]].
+      left; assumption.
+      right; constructor 1; do 2 esplit; [|do 2 esplit]; eauto.
+      left; eapply sb_order; eauto.
+      all: clear rxy ryz.
+      all: right.
+      all: repeat (
+        try repeat match goal with
+          H: sb ?x ?y, H2: sb ?y ?z |- _ =>
+            assert (sb x z); [eapply sb_order; eauto|clear H H2]
+        | H: sb ?x ?y, H2: sw ?y ?z, H3: sb ?z ?e |- _ ?x _ =>
+            assert ((sb^? ⨾ sw ⨾ sb^?) x e); [do 2 esplit; [|do 2 esplit]; eauto|clear H H2 H3]
+        | H: sb ?x ?y, H2: sw ?y ?z |- _ ?x _ =>
+            assert ((sb^? ⨾ sw ⨾ sb^?) x z); [do 2 esplit; [|do 2 esplit]; eauto|clear H H2]
+        | H: sw ?x ?y, H2: sb ?y ?z |- _ ?x _ =>
+            assert ((sb^? ⨾ sw ⨾ sb^?) x z); [do 2 esplit; [|do 2 esplit]; eauto|clear H H2]
+        | H: sw ?x ?y |- _ ?x _ =>
+            assert ((sb^? ⨾ sw ⨾ sb^?) x y); [do 2 esplit; [|do 2 esplit]; eauto|clear H]
+        end;
+        try (idtac + constructor 1; eauto; solve [idtac]);
+        try (econstructor 2; [idtac + econstructor 1; eauto; solve [idtac]|])).
+    }
+    intros x y [sbxy|swxy].
+    constructor 1; left; auto.
+    induction swxy as [x y (e & sbxe & f & swef & sbfy)|].
+    {
+      all: destruct sbxe as [<-|sbxe]; [|econstructor 2; [constructor 1; left; eauto|]].
+      all: destruct sbfy as [<-|sbfy]; [|econstructor 2; [|constructor 1; left; eauto]].
+      all: constructor 1; right; auto.
+    }
+    econstructor 2; eauto.
+  assert (shb_hb: shb ⊆ hb).
+    intros x y [sbxy|shbbxy]%shbb.
+    left; auto.
+    right.
+    induction shbbxy as [x y (e & [<-|sbxe] & f & swef & [->|sbfz])|x z y rxz IHxz rzy IHzy].
+    constructor 1; auto.
+    constructor 3; esplit; esplit; eauto.
+    constructor 4; esplit; esplit; [|constructor 1]; eauto.
+    constructor 4; esplit; esplit; [|constructor 3; esplit; esplit]; eauto.
+    constructor 5; esplit; esplit; eauto.
+  assert (sw_nshb: forall x y, (sb^? ⨾ sw ⨾ sb^?) x y -> ~ shb^? y x).
+    intros w z (x & sbwx & y & swxy & sbyz) rzw.
+    destruct swxy as (x' & [<- xrel] & e & sbxe & f & (e' & f' & rsef & <- & <-) & g & rffg & y' & sbgy & [-> yacq]).
+    assert (moef: mo^? e' f').
+      destruct rsef as [(e'' & [<- eatom] & moef) _].
+      auto.
+    clear rsef.
+    assert (ngshbe: ~shb^? g (`e')).
+      intros shbge.
+      destruct rffg as (f'' & g' & rfeg & ff & <-), moef as [<-|moef].
+      replace (`e') in *; clear ff e'.
+      destruct shbge as [<-%sig_ext|shbge].
+      eapply rf_acy; constructor 1; eauto.
+      destruct (coherence_rf (`g') (`f'')) as [_ nrffg].
+      apply shb_hb; auto.
+      apply nrffg; do 2 esplit; eauto.
+      destruct shbge as [gg|shbge].
+      assert (IsRMW (`g')).
+        destruct rfeg as [ir rfeg], e' as [e iw], g' as [g irw].
+        simpl in ir, gg |- *; subst g.
+        destruct e as [[]]; try discriminate ir; try discriminate iw; reflexivity.
+      destruct (rmw_atomic (`f'') (`g')) as (f''' & g'' & [mofg imm] & ff' & gg').
+      do 3 esplit; eauto; replace (`e'); auto.
+      rewrite gg in gg'.
+      rewrite ff in ff'.
+      apply sig_ext in ff'.
+      apply sig_ext in gg'.
+      subst f''' g''.
+      do 2 eapply (mo_total_order_per_loc 0); eauto.
+      destruct (coherence_rw (`g') (`e')) as [_ nmorfeg].
+      apply shb_hb; auto.
+      apply nmorfeg; do 4 esplit; eauto.
+    apply ngshbe.
+    assert (shbwe: shb^? w (`e')).
+      destruct sbwx as [<-|sbwx], sbxe as [<-|(x' & [<- xfence] & sbxe)].
+      left; auto.
+      right; constructor 1; left; auto.
+      right; constructor 1; left; auto.
+      right; econstructor 2; econstructor 1; left; eauto.
+    clear sbwx sbxe.
+    assert (shbze: shb^? z (`e')).
+      destruct shbwe as [<-|shbwe], rzw as [<-|rzw].
+      left; auto.
+      right; auto.
+      right; auto.
+      right; econstructor 2; eauto.
+    clear shbwe rzw.
+    assert (shbye: shb^? y (`e')).
+      destruct shbze as [<-|shbze], sbyz as [<-|sbyz].
+      left; auto.
+      right; constructor 1; left; auto.
+      right; auto.
+      right; econstructor 2; [econstructor 1; left|]; eauto.
+    clear shbze sbyz.
+    destruct shbye as [<-|shbye], sbgy as [<-|(y' & sbgy & [<- yfence])].
+    left; auto.
+    right; constructor 1; left; auto.
+    right; auto.
+    right; econstructor 2; [econstructor 1; left|]; eauto.
+  (*
+  assert (shbs_nshbs: forall x y (rxy: shbs x y), ~shb^? y x).
+    intros x y rxy ryx.
+    destruct rxy as [sbxy|swxy], ryx as [<-|shbyx].
+    eapply sb_order; eauto.
+    do 2 eapply sb_order; eauto.
+    apply sw_nshb in swyx; apply swyx; right; constructor 1; left; auto.
+    apply sw_nshb in swxy; apply swxy; left; auto.
+    1,2: apply sw_nshb in swxy; apply swxy; right; constructor 1.
+    left; auto.
+    right; auto.
+  *)
+  intros x rxy.
+  apply -> clos_trans_of_transitive in rxy; [|apply transitive_ct].
+  set (ryx := rxy).
+  set (y := x) in rxy at 2, ryx at 1.
+  clearbody y ryx.
+  induction rxy as [x y [sbxy|swxy]|].
+  apply shbb in ryx as [sbyx|swyx].
+  do 2 eapply sb_order; eauto.
+  assert (shbxy: shb x y).
+    constructor 1; left; auto.
+  clear sbxy.
+  induction swyx as [x y swyx|x z y rxz IHrxz rzy IHrzy].
+  eapply sw_nshb; eauto.
+  apply IHrxz; econstructor 2; [eapply shbb; right|]; eauto.
+  eapply sw_nshb.
+  do 2 esplit; [|do 2 esplit].
+  2: eauto.
+  1,2: left; auto.
+  right; auto.
+  apply IHrxy1.
+  econstructor 2; eauto.
 Qed.
-
 
 (*
 SC:
