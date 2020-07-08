@@ -56,6 +56,10 @@ My interpretation of atomic/non-atomic interactions in current standard:
 
 INIT:
 
+The value of an object visible to a thread T at a particular point is the initial value of the object, a value
+assigned to the object by T, or a value assigned to the object by another thread, according to the rules
+below.
+
 Variables with static storage duration are initialized as a consequence of program initiation. Variables with
 thread storage duration are initialized as a consequence of thread execution. Within each of these phases of
 initiation, initialization occurs as follows.
@@ -213,16 +217,6 @@ Definition IsSC (o: Op) := mode o = mSc.
 Definition IsCns (o: Op) := mode o = mCns.
 
 (*
-Fixpoint rf_chain_length (o: Op') :=
-  match o with
-    write _ _
-  | fence _ => 0
-  | read _ f
-  | rmw _ f => 1 + (rf_chain_length f)
-  end.
-*)
-
-(*
 Program Fixpoint loc' (o: Op') (WF: OP_WF o) (NF: ~IsFence' o) :=
   match o as o'
     return ~IsFence' o' -> OP_WF o' -> Loc
@@ -317,7 +311,7 @@ order of M. [ Note: There is a separate order for each atomic object. There is n
 be combined into a single total order for all objects. In general this will be impossible since different threads
 may observe modifications to different objects in inconsistent orders. — end note ]
 
-Don't think there is harm in including non-atomic objects in this. They are necessarily totally ordered anyway.
+Can we include non-atomic objects in this? Are mo constraints implied by visible side effect?
 *)
 
 Conjecture mo: relation Write.
@@ -428,7 +422,7 @@ before B, or
 [ Note: “Carries a dependency to” is a subset of “ is sequenced before”, and is similarly strictly intra- thread.
 — end note ]
 
-Assume the operator conditions are modelled as read-froms
+Assume the operator conditions are modelled as chain of read-froms
 *)
 
 Definition cd := (rf ∩ (`↓ sb))⁺.
@@ -500,20 +494,7 @@ An evaluation A inter-thread happens before an evaluation B if
    — A synchronizes with X and X is sequenced before B, or
    — A is sequenced before X and X inter- thread happens before B, or
    — A inter-thread happens before X and X inter-thread happens before B.
-[ Note: The “ inter-thread happens before” relation describes arbitrary concatenations of “sequenced before”,
-“synchronizes with” and “dependency-ordered before” relationships, with two exceptions. The first exception
-is that a concatenation is not permitted to end with “dependency-ordered before” followed by “sequenced
-before”. The reason for this limitation is that a consume operation participat ing in a “dependency-ordered
-before” relationship provides ordering only with respect to operations to which this consume operation
-actually carries a dependency. The reason that this limitation applies only to the end of such a concatenation
-is that any subsequent release operation will provide the required ordering for a prior consume operation.
-The second exception is that a concatenation is not permitted to consist entirely of “sequenced before”. The
-reasons for this limitation are (1) to permit “inter- thread happens before” to be transitively closed and (2)
-the “happens before” relation, defined below, provides for relationships consisting entirely of “sequenced
-before”. — end note ]
-*)
 
-(*
 Definition is structurally recursive so requires an inductive type.
 But how to prove its acyclicity in the absence of a structural definition?
 Should not matter - an instance of ithhb is well-founded but that doesnt prove the whole relation is
@@ -526,33 +507,653 @@ Inductive ithb (x y: Op): Prop :=
 | ithb_sb_ithb (r: (sb ⨾ ithb) x y)
 | ithb_ithb_ithb (r: (ithb ⨾ ithb) x y).
 
+Fixpoint ithb_my_ind
+    (P : Op -> Op -> Prop)
+    (sw_rec: forall x y, sw x y -> P x y)
+    (dob_rec: forall x y, (`↑ dob) x y -> P x y)
+    (swsb_rec: forall x y, (sw ⨾ sb) x y -> P x y)
+    (sbithb_rec: forall x y e,
+      sb x e ->
+      ithb e y ->
+      P e y ->
+      P x y)
+    (ithbithb_rec: forall x y e,
+      ithb x e ->
+      ithb e y ->
+      P x e ->
+      P e y ->
+      P x y)
+    (x y : Op)
+    (i: ithb x y):
+    P x y :=
+  let rec := ithb_my_ind P sw_rec dob_rec swsb_rec sbithb_rec ithbithb_rec in
+  match i
+  with
+    ithb_sw _ _ r => sw_rec x y r
+  | ithb_dob _ _ r => dob_rec x y r
+  | ithb_sw_sb _ _ r => swsb_rec x y r
+  | ithb_sb_ithb _ _ (ex_intro _ e (conj rxe rey)) => sbithb_rec x y e rxe rey (rec e y rey)
+  | ithb_ithb_ithb _ _ (ex_intro _ e (conj rxe rey)) => ithbithb_rec x y e rxe rey(rec x e rxe) (rec e y rey)
+  end.
+
 (*
-Program Fixpoint ithb' x y {measure x (sb⁻¹)} :=
-  sw x y \/
-  (*dob \/*)
-  (sw ⨾ sb) x y \/
-  exists c
-    (p: sb x c), ithb' c y.
-Next Obligation.
-  unfold MR; simpl.
-  lapply (acy_wf sb⁻¹).
-  intros wf [x xp]; revert xp.
-  induction x using (well_founded_induction (wf)).
-  constructor 1.
-  intros [y yp] rxy.
-  apply H.
-  auto.
-  destruct (sb_order) as [irr tra].
-  intros x rxx.
-  apply -> clos_trans_of_transitive in rxx.
-  apply irr with x; auto.
-  intros e f g ref reg.
-  apply tra with f; auto.
-Qed.
+[ Note: The “ inter-thread happens before” relation describes arbitrary concatenations of “sequenced before”,
+“synchronizes with” and “dependency-ordered before” relationships, with two exceptions. The first exception
+is that a concatenation is not permitted to end with “dependency-ordered before” followed by “sequenced
+before”. The reason for this limitation is that a consume operation participating in a “dependency-ordered
+before” relationship provides ordering only with respect to operations to which this consume operation
+actually carries a dependency. The reason that this limitation applies only to the end of such a concatenation
+is that any subsequent release operation will provide the required ordering for a prior consume operation.
+The second exception is that a concatenation is not permitted to consist entirely of “sequenced before”. The
+reasons for this limitation are (1) to permit “inter- thread happens before” to be transitively closed and (2)
+the “happens before” relation, defined below, provides for relationships consisting entirely of “sequenced
+before”. — end note ]
+
+This is a constraint on the construction of the path in sb ∪ dob ∪ sw.
+- Define the union and its transitive closure outside Prop
+- Express it's construction as a list
+- Define relations on the construction of the transitive closure
+  - relations on indices of the list
 *)
 
-Definition ithb_alt: relation Op :=
+Inductive clos_trans_t {A : Type} (R : A -> A -> Type) (x : A) : A -> Type :=
+	t_step_t : forall y : A, R x y -> clos_trans_t R x y
+| t_trans_t : forall y z : A, clos_trans_t R x y -> clos_trans_t R y z -> clos_trans_t R x z.
+
+Lemma ithb_alt
+  (tc_to_l :=
+    fun {A} {r: A -> A -> Type} {x} {y} (rxyp: clos_trans_t r x y) =>
+      (fix f {x} {y} (rxy: clos_trans_t r x y) :=
+        match rxy with
+          t_step_t _ _ y rxy => [existT (fun '(x, y) => r x y) (x, y) rxy] 
+        | t_trans_t _ _ e y rxe rey => f rxe ++ f rey
+        end) _ _ rxyp)
+  (list_rel :=
+    fun {A} {r: A -> A -> Type}
+        (f: forall {x} {y}, r x y -> Prop)
+        (l: list {xy: A*A & let (x, y) := xy in r x y})
+        n o =>
+      n < length l /\
+      S n = o /\
+      match nth_error l n with
+        Some (existT _ (x, y) rxy) =>
+          f rxy
+      | None => False
+      end)
+  (ithb_r := fun x y => let dobc := `↑ dob in {sb x y} + {sw x y} + {dobc x y})
+  (is_sb := list_rel
+    (fun x y (rxy: ithb_r x y) =>
+       match rxy with
+        inleft (left _) => True
+       | _ => False
+       end))
+  (is_dob := list_rel
+    (fun x y (rxy: ithb_r x y) =>
+       if rxy then False else True)):
+  ithb ≡
+    fun x y =>
+      exists rxy: clos_trans_t ithb_r x y,
+        let l := tc_to_l rxy in
+        let lsb := is_sb l in
+        let ldob := is_dob l in
+        let lstart n := n = O in
+        let lend n := n = (length l) in
+        ldob ⨾ lsb⁺ ⨾ ⦗lend⦘ ∪
+        ⦗lstart⦘ ⨾ lsb⁺ ⨾ ⦗lend⦘ ⊆ ∅₂.
+Proof.
+  assert (len_1: forall A r x y rxy, length (tc_to_l A r x y rxy) >= 1).
+    intros A r f g rxy.
+    induction rxy; simpl; auto with *.
+    rewrite app_length.
+    auto with *.
+
+  assert (sb_lt: forall x y l, (is_sb l)⁺ x y -> x < y).
+    intros f g l' rfg.
+    induction rfg as [f g (lfl & sfg & fval)|].
+    destruct g; simpl in sfg; auto with *.
+    auto with *.
+
+  assert (is_sb_ext:
+    forall l1 l2 f g,
+      f < g ->
+      g > length l1 ->
+      (is_sb (l1 ++ l2))⁺ f g ->
+      (is_sb l2)⁺ (f - length l1) (g - length l1)).
+    intros l1 l2.
+    induction l1.
+    intros f g fc gc sbfg.
+    simpl in fc, gc, sbfg |- *; auto with *.
+    do 2 rewrite PeanoNat.Nat.sub_0_r.
+    assumption.
+    intros f g fc gc sbfg.
+    destruct g; [eauto with *|].
+    simpl in fc, gc, sbfg |- *.
+    destruct f.
+    apply (IHl1 0); auto with *.
+    2: apply (IHl1 f); auto with *.
+    apply t_step_rt in sbfg as (f & (len0 & s0f & val0) & [->|sbfg]%clos_refl_transE); auto with *.
+    subst f.
+    clear len0 gc fc val0.
+    set (f := 0) in |- *.
+    set (f' := 1) in sbfg.
+    assert (ff: f' = S f) by auto.
+    remember (S g) as g' eqn: gg in sbfg.
+    clearbody f f'.
+    2: clear fc gc.
+    2: remember (S f) as f' eqn: ff in sbfg.
+    2: remember (S g) as g' eqn: gg in sbfg.
+    1-2: revert f g ff gg.
+    1-2: induction sbfg as [f' g' (flen & sfg & fval)|f' z' g' sbfg1 IHsbfg1 sbfg2 IHsbfg2].
+    1-4: intros f g ff gg.
+    1-4: subst f' g'.
+    1,3: constructor 1; repeat split; auto with *.
+    1-2: destruct z'; [apply sb_lt in sbfg1|]; auto with *.
+    1-2: econstructor 2; [apply IHsbfg1|apply IHsbfg2]; eauto.
+
+  split.
+  intros x y rxy.
+  induction rxy as
+    [x y rxy|
+     x y rxy|
+     x y (e & rxe & rey)|
+     x y e rxe rey [IHrey IHrey_cond]|
+     x y e rxe rey [IHrxe IHrxe_cond] [IHrey IHrey_cond]]
+    using ithb_my_ind; unshelve esplit.
+  constructor 1; left; right; auto.
+  constructor 1; right; auto.
+  econstructor 2; constructor 1; left; [right|left]; eauto.
+  econstructor 2; [constructor 1; left; left|]; eauto.
+  econstructor 2; eauto.
+
+  1-5: intros l lsb ldob lstart lend n o.
+  1-3: intros [(f & ldobnf & g & lsbfo & [-> endo])|(f & [<- startn] & g & lsbno & [-> endo])];
+    compute in endo; [|compute in startn].
+  1,3,5: destruct ldobnf as (lnl & snf & nval).
+  1-2: apply sb_lt in lsbfo.
+  1-2: subst o f; auto with *.
+  destruct lsbfo as [o (lfl & sfo & fval)|].
+  subst o; injection endo; intros f1; subst f.
+  injection f1; intros n0; subst n.
+  compute in nval; assumption.
+  apply sb_lt in lsbfo1.
+  apply sb_lt in lsbfo2.
+  auto with *.
+  1-3: destruct lsbno as [o (lnl & sno & nval)|].
+  1,3,5: subst o n; compute in nval; assumption.
+  1-3: apply sb_lt in lsbno2.
+  1-2: apply sb_lt in lsbno1.
+  1-2: auto with *.
+  subst z.
+  destruct lsbno1 as [o (lnl & sno & nval)|].
+  subst o n; compute in nval; assumption.
+  apply sb_lt in lsbno1_1.
+  apply sb_lt in lsbno1_2.
+  auto with *.
+
+  1-2: intros [(f & (lnl & snf & ndob) & g & lsbfo & [-> endo])|(f & [<- startn] & g & lsbno & [-> endo])].
+  unfold lend in *.
+  destruct n; simpl in ndob.
+  assumption.
+  destruct o; apply sb_lt in lsbfo as snlto.
+  auto with *.
+  subst f.
+  apply IHrey_cond with n o.
+  left.
+  repeat esplit; eauto.
+  simpl in lnl |- *; auto with *.
+  eapply is_sb_ext in lsbfo; simpl in lsbfo; fold (tc_to_l Op ithb_r e y IHrey) in lsbfo.
+  rewrite PeanoNat.Nat.sub_0_r in lsbfo.
+  assumption.
+  assumption.
+  simpl in endo |- *.
+  auto with *.
+
+  unfold lstart, lend in startn, endo; subst n; simpl in endo.
+  apply t_step_rt in lsbno as (f & sbnf & [->|sbfo]%clos_refl_transE).
+  1,2: destruct sbnf as (nlen & <- & nsb).
+  pose (len_1 Op ithb_r e y IHrey).
+  auto with *.
+  destruct o; [apply sb_lt in sbfo; auto with *|].
+  apply is_sb_ext in sbfo; simpl in sbfo; auto with *.
+  rewrite PeanoNat.Nat.sub_0_r in sbfo.
+  apply IHrey_cond with 0 o.
+  right.
+  repeat esplit.
+  assumption.
+  auto with *.
+  apply sb_lt in sbfo; auto with *.
+  simpl; auto with *.
+  pose (len_1 Op ithb_r e y IHrey).
+  auto with *.
+
+  1-2: simpl in l.
+  1-2: set (lp := tc_to_l Op ithb_r x e IHrxe) in *.
+  1-2: set (ln := tc_to_l Op ithb_r e y IHrey) in *.
+  1-2: unfold lend in endo; simpl in endo; subst o.
+  subst f.
+  destruct (Compare_dec.lt_dec n (length lp)).
+  apply IHrey_cond with 0 (length ln).
+  right.
+  repeat esplit.
+  apply is_sb_ext in lsbfo.
+  assert (H1: S n - length lp = 0) by auto with *; rewrite H1 in *.
+  assert (H2: length l - length lp = length ln).
+    unfold l; rewrite app_length.
+    auto with *.
+  rewrite H2 in *.
+  assumption.
+  apply sb_lt in lsbfo; assumption.
+  pose (H := len_1 _ _ _ _ IHrey); fold ln in H.
+  unfold l; rewrite app_length; auto with *.
+  apply IHrey_cond with (n - length lp) (length ln).
+  left.
+  repeat esplit; auto with *.
+  unfold l in lnl; rewrite app_length in lnl.
+  auto with *.
+  assert (nth_error l n = nth_error ln (n - length lp)).
+    unfold l.
+    clear IHrxe_cond ndob lsbfo lnl.
+    revert n n0.
+    induction lp; intros n n0.
+    simpl; auto with *.
+    destruct n.
+    contradict n0; simpl; auto with *.
+    simpl.
+    apply IHlp.
+    simpl in n0.
+    auto with *.
+  rewrite <- H.
+  assumption.
+  apply is_sb_ext in lsbfo.
+  assert (H1: S n - length lp = S (n - length lp)) by auto with *; rewrite <- H1.
+  assert (H2: length ln = length l - length lp).
+    unfold l; rewrite app_length; auto with *.
+  rewrite H2.
+  assumption.
+  apply sb_lt in lsbfo; assumption.
+  auto with *.
+
+  unfold lstart in startn; subst n.
+  apply (IHrey_cond 0 (length ln)).
+  right.
+  repeat esplit.
+  apply is_sb_ext in lsbno.
+  rewrite PeanoNat.Nat.sub_0_l in lsbno.
+  assert (H2: length ln = length l - length lp).
+    unfold l; rewrite app_length; auto with *.
+  rewrite <- H2 in lsbno.
+  auto.
+  apply sb_lt in lsbno; assumption.
+  unfold l; rewrite app_length.
+  pose (H := len_1 _ _ _ _ IHrey); fold ln in H.
+  auto with *.
+
+  pose (clos_trans_t_size A R (x y: A) (rxy: clos_trans_t R x y) :=
+    (fix f x y (rxy: clos_trans_t R x y) :=
+      match rxy with
+        t_step_t _ _ y rxy => 0
+      | t_trans_t _ _ y z rxy ryz => (f _ _ rxy) + (f _ _ ryz) + 1
+      end) _ _ rxy).
+  pose (clos_trans_t_rtl_error A R (x y: A) (rxy: clos_trans_t R x y) :=
+    (fix f x y (rxy: clos_trans_t R x y) :=
+      match rxy with
+        t_step_t _ _ y rxy => None
+      | t_trans_t _ _ y z rxy ryz =>
+          match (f _ _ ryz) with
+            None => Some (existT _ _ rxy)
+          | Some (existT _ e rtye) => Some (existT _ _ (t_trans_t _ _ _ _ rxy rtye))
+          end
+      end) _ _ rxy).
+  pose (clos_trans_t_rhd A R (x y: A) (rxy: clos_trans_t R x y) :=
+    (fix f x y (rxy: clos_trans_t R x y) :=
+      match rxy with
+        t_step_t _ _ y rxy => existT _ x rxy
+      | t_trans_t _ _ y z rxy ryz => f y z ryz
+      end) _ _ rxy).
+  assert (clos_trans_t_rhd_hd_tl_join: 
+    forall A R (x y: A) (rxy: clos_trans_t R x y),
+      let '(existT _ e' rxyhd) := clos_trans_t_rhd _ _ _ _ rxy in
+      match (clos_trans_t_rtl_error _ _ _ _ rxy) with
+        None => x = e'
+      | Some (existT _ e rxytl) => e = e'
+      end).
+    intros A R x y rxy.
+    induction rxy; simpl; auto.
+    destruct (clos_trans_t_rhd _ _ _ _ rxy2) as [f' rfz] eqn:rxy2hdeq.
+    destruct (clos_trans_t_rtl_error _ _ _ _ rxy2) as [[f rxy2tl]|] eqn:rxy2tleq.
+    rewrite <- IHrxy2.
+    reflexivity.
+    assumption.
+  assert (size_rtl_dec:
+    forall A R (x y: A) (rxy: clos_trans_t R x y),
+      match (clos_trans_t_rtl_error _ _ _ _ rxy) with
+        None => True
+      | Some (existT _ e rxytl) =>
+          S (clos_trans_t_size _ _ _ _ rxytl) = clos_trans_t_size _ _ _ _ rxy
+      end).
+    intros A R x y rxy.
+    induction rxy; simpl; auto.
+    destruct (clos_trans_t_rtl_error _ _ _ _ rxy2) as [[f rxy2tl]|] eqn:rxy2tleq.
+    rewrite <- IHrxy2.
+    cbn.
+    fold (clos_trans_t_size _ _ _ _ rxy1).
+    fold (clos_trans_t_size _ _ _ _ rxy2tl).
+    auto with *.
+    destruct rxy2; simpl in rxy2tleq |- *.
+    auto with *.
+    destruct (clos_trans_t_rtl_error _ _ _ _ rxy2_2) as [[foo bar]|]; discriminate rxy2tleq.
+  assert (tc_to_l_rtl_eq:
+    forall A R (x y: A) (rxy: clos_trans_t R x y),
+      match (clos_trans_t_rtl_error _ _ _ _ rxy) with
+        None => True
+      | Some (existT _ e rxytl) =>
+          let 'existT _ e rey := clos_trans_t_rhd _ _ _ _ rxy in
+          tc_to_l _ _ _ _ rxytl ++ [existT _ (e, y) rey] = tc_to_l _ _ _ _ rxy
+      end).
+    intros A R x y rxy.
+    induction rxy; simpl; auto.
+    destruct (clos_trans_t_rhd _ _ _ _ rxy2) as [f' rfz] eqn:rxy2hdeq.
+    destruct (clos_trans_t_rtl_error _ _ _ _ rxy2) as [[f rxy2tl]|] eqn:rxy2tleq.
+    rewrite <- IHrxy2.
+    cbn.
+    auto with *.
+    destruct rxy2; simpl in rxy2hdeq, rxy2tleq |- *.
+    apply (f_equal (
+      fun '(existT _ p1 p2) =>
+        existT (fun '(x, y) => R x y) (p1, y0) p2)) in rxy2hdeq.
+    rewrite rxy2hdeq; reflexivity.
+    destruct (clos_trans_t_rtl_error _ _ _ _ rxy2_2) as [[foo bar]|]; discriminate rxy2tleq.
+  
+  pose (clos_trans_t_rtl_rel A R x :=
+    fun
+      (p c: { y: A & clos_trans_t R x y }) =>
+      let 'existT _ cy cr := c in
+      match clos_trans_t_rtl_error _ _ _ _ cr with
+        None => False
+      | Some c_tl => p = c_tl
+      end).
+
+  assert (step_wf: forall A R x, well_founded (clos_trans_t_rtl_rel A R x)).
+    intros A R x (y & rxy).
+    (*
+      step relation for x is on {y & crt Y x y}
+      induction on size reqires {'(x,y) & crt Y x y}
+      can we express x' y' rxy' in terms of the larger type?
+       - rxy's type must be dependent on x' and y' in the step relation, rather than on projT1 rxy
+       - 
+      can we redefine our step relation in terms of the larger type?
+       - 
+    *)
+    assert (size_ind :=
+      well_founded_induction
+        (Wf_nat.well_founded_ltof _ (
+          fun '(existT _ (x, y) rxy: {'(x, y): A*A & clos_trans_t R x y}) =>
+            clos_trans_t_size A R x y rxy))).
+    unshelve evar (spec_flip:
+      forall r'xy: {'(x,y): A*A & clos_trans_t R x y},
+        (let '(x, y) := projT1 r'xy in clos_trans_t R x y) =
+        clos_trans_t R (let '(x, y) := projT1 r'xy in x)
+                        (let '(x, y) := projT1 r'xy in y)).
+      destruct r'xy as [[]]; simpl; reflexivity.
+    pose (r'xy := existT (fun '(x, y) => clos_trans_t R x y) (x, y) rxy).
+    pose (x' := let (x'', y'') := projT1 r'xy in x'').
+    unshelve evar (Heqx: x' = x).
+      unfold x'; reflexivity.
+    pose (y' := let (x'', y'') := projT1 r'xy in y'').
+    unshelve evar (Heqy: y' = y).
+      unfold y'; reflexivity.
+    unshelve evar (rxy': clos_trans_t R x' y').
+      unfold x', y'.
+      rewrite <- (spec_flip r'xy).
+      apply (projT2 r'xy).
+    unshelve evar (rxy'_raw: clos_trans_t R x y).
+      rewrite <- Heqx.
+      rewrite <- Heqy.
+      apply rxy'.
+    unshelve evar (Heqrxy: rxy'_raw = rxy).
+      (* requires invariance of reflexive rewrites, which is why the previous equalities are transparent *)
+      unfold rxy'_raw, rxy'.
+      unfold x', y', r'xy; simpl.
+      reflexivity.
+    clearbody Heqx Heqy Heqrxy r'xy.
+    assert
+     (Hacc:
+        Acc (clos_trans_t_rtl_rel A R x)
+          (existT (fun y0 : A => clos_trans_t R x y0) y rxy) =
+        Acc (clos_trans_t_rtl_rel A R x')
+          (existT (fun y0 : A => clos_trans_t R x' y0) y' rxy')).
+      destruct Heqx, Heqy; simpl.
+      f_equal.
+      f_equal.
+      simpl in rxy'_raw.
+      subst rxy'_raw.
+      symmetry; assumption.
+    rewrite Hacc; clear Hacc.
+    clear x y rxy Heqx Heqy Heqrxy rxy'_raw.
+    revert x' y' rxy'.
+    induction r'xy using size_ind; intros x' y' rxy'.
+    assert (size_dec := size_rtl_dec _ _ _ _ rxy').
+    constructor 1.
+    intros [e rxe] e_tl_y.
+    simpl in e_tl_y.
+    destruct (clos_trans_t_rtl_error _ _ _ _ rxy').
+    subst s.
+    specialize (H (existT _ (x', e) rxe)); simpl in H.
+    apply H.
+    unfold Wf_nat.ltof.
+    destruct r'xy as [[x y] rxy]; simpl in *.
+    subst x' y' rxy'.
+    auto with *.
+    contradiction.
+
+  (*
+  assert (clos_trans_t_n1_ind:
+    forall A R (x: A) (P: A -> Prop),
+      (forall y, R x y -> P y) ->
+      (forall y z, R y z -> clos_trans_t R x y -> P y -> P z) ->
+      forall y,
+      clos_trans_t R x y -> P y).
+    intros A R x P base recurs y rxy.
+    pose (make_ind x y rxy rxystep :=
+      existT (fun '(existT _ (x, y) rxy) => clos_trans_t_step_type _ _ _ _ rxy)
+             (existT (fun '(x, y) => clos_trans_t R x y) (x, y) rxy)
+             rxystep).
+    pose (rxystep := clos_trans_t_rstep _ _ _ _ rxy).
+    destruct rxystep as (e & [[<- rxy0]|[rxe rxelt]] & rey) eqn:seq.
+    apply base; assumption.
+    apply recurs with e; auto.
+    pose (rxestep := clos_trans_t_rstep _ _ _ _ rxe).
+    pose (rxyind := make_ind x y rxy rxystep).
+    assert (sr: step_rel (make_ind x e rxe rxestep) rxyind).
+      unfold rxyind.
+      rewrite seq.
+      simpl.
+      reflexivity.
+    clear seq rxelt rey.
+    subst rxystep.
+    revert e rxe rxestep sr.
+    induction rxyind using (well_founded_induction step_wf).
+    intros e rxe rxestep sr.
+    destruct rxestep as (f & [[<- rxf0]|[rxf rxflt]] & rfe) eqn:seq.
+    apply base; auto.
+    apply recurs with f; auto.
+    specialize (H _ sr).
+    apply H with rxf.
+    simpl.
+    reflexivity.
+    *)
+
+  intros x y (rxe & rxe_cond).
+  remember y as e in rxe, rxe_cond.
+  pose (r'xe := existT _ e rxe).
+  set (e' := projT1 r'xe).
+  unshelve evar (Heqe': e' = e).
+    reflexivity.
+  set (rxe' := projT2 r'xe).
+  fold e' in rxe'.
+  unshelve evar (rxe'_raw: clos_trans_t ithb_r x e).
+    rewrite <- Heqe'.
+    apply rxe'.
+  unshelve evar (Heqrxe': rxe'_raw = rxe).
+    unfold rxe'_raw, rxe'.
+    unfold e', r'xe; simpl.
+    reflexivity.
+  clearbody Heqe' Heqrxe' r'xe.
+  assert (Heqtcl: tc_to_l Op ithb_r x e rxe =
+                  tc_to_l Op ithb_r x e' rxe').
+    destruct Heqe', Heqrxe'; simpl.
+    f_equal.
+  rewrite Heqtcl in rxe_cond.
+  subst e rxe.
+  assert (ncond:
+    ithb e' y \/
+      let l := tc_to_l Op ithb_r x e' rxe' in
+      let lsb := is_sb l in
+      let ldob := is_dob l in
+      let lstart := fun n : nat => n = 0 in
+      let lend := fun n : nat => n = length l in
+      ldob ⨾ lsb⁺ ⨾ ⦗lend⦘ ∪ ⦗lstart⦘ ⨾ lsb⁺ ⨾ ⦗lend⦘ ⊆ ∅₂ /\
+      (sb e' y /\ ldob ⨾ ⦗lend⦘ ⊆ ∅₂ \/ e' = y)).
+    right; split; auto.
+  clear rxe'_raw Heqe' Heqtcl rxe_cond.
+  induction r'xe as [r'xe IHp] using (well_founded_induction (step_wf _ _ x)).
+  assert (rxytltol := tc_to_l_rtl_eq _ _ _ _ rxe').
+  assert (rxyhdtl := clos_trans_t_rhd_hd_tl_join _ _ _ _ rxe').
+  destruct (clos_trans_t_rtl_error _ _ _ _ rxe') as [[f rxf']|] eqn:rxetl.
+  destruct (clos_trans_t_rhd _ _ _ _ rxe') as [f' rfe] eqn:rxehd.
+  subst f'.
+  apply (IHp (existT _ f rxf')).
+  destruct r'xe; simpl in *; fold e' rxe'.
+  rewrite rxetl; reflexivity.
+  destruct ncond as [ithbey|[rxe_cond sbeqey]].
+  left.
+  destruct rfe as [[sbfe|swfe]|dobfe].
+  econstructor 4; repeat esplit; eauto.
+  econstructor 5; repeat esplit; vauto.
+  econstructor 5; repeat esplit; vauto.
+  destruct rfe as [[sbfe|swfe]|dobfe].
+  right.
+  intros l lsb ldob lstart lend.
+  split.
+  rewrite <- rxytltol in rxe_cond; clear rxytltol.
+  intros i j
+    [(e'' & (ilen & <- & ival) & f' & sbef & [-> jend])|
+      (e'' & [<- istart] & f' & sbij & [-> jend])].
+  unfold lend in jend; subst j.
+  apply (rxe_cond i (S (length l))).
+  left.
+  repeat esplit.
+  rewrite app_length; auto with *.
+  rewrite nth_error_app1; assumption.
+  apply t_rt_step; exists (length l); repeat esplit.
+  apply clos_refl_transE; right.
+  clear ilen.
+  induction sbef as [e'' j (elen & <- & eval)|].
+  constructor 1; repeat esplit.
+  rewrite app_length; auto with *.
+  rewrite nth_error_app1; assumption.
+  econstructor 2; eauto.
+  rewrite app_length; rewrite length_cons; unfold l; simpl; auto with *.
+  rewrite nth_error_app2; unfold l.
+  rewrite PeanoNat.Nat.sub_diag; simpl; constructor.
+  constructor 1.
+  rewrite app_length; rewrite length_cons; unfold l; simpl; auto with *.
+  unfold lstart, lend in istart, jend; subst i j.
+  apply (rxe_cond 0 (S (length l))).
+  right.
+  repeat esplit.
+  apply t_rt_step; exists (length l); repeat esplit.
+  apply clos_refl_transE; right.
+  clear ldob lstart lend rxe_cond size_rtl_dec clos_trans_t_size len_1 IHp.
+  induction sbij as [e'' j (elen & <- & eval)|].
+  constructor 1; repeat esplit.
+  rewrite app_length; auto with *.
+  rewrite nth_error_app1; assumption.
+  econstructor 2; eauto.
+  rewrite app_length; rewrite length_cons; unfold l; simpl; auto with *.
+  rewrite nth_error_app2; unfold l.
+  rewrite PeanoNat.Nat.sub_diag; simpl; constructor.
+  constructor 1.
+  rewrite app_length; rewrite length_cons; unfold l; simpl; auto with *.
+  left; split; destruct sbeqey as [[sbey fecond]|<-].
+  eapply sb_order; eauto.
+  assumption.
+  assert (rxftltol := tc_to_l_rtl_eq _ _ _ _ rxf').
+  assert (rxfhdtl := clos_trans_t_rhd_hd_tl_join _ _ _ _ rxf').
+  destruct (clos_trans_t_rtl_error _ _ _ _ rxf') as [[g rxg']|] eqn:rxftl.
+  destruct (clos_trans_t_rhd _ _ _ _ rxf') as [g' rgf] eqn:rxfhd.
+  pose (rxflen := rxftltol).
+  apply (f_equal (@length _)) in rxflen.
+  rewrite app_length in rxflen.
+  rewrite length_cons in rxflen.
+  simpl in rxflen.
+  pose (rxelen := rxytltol).
+  apply (f_equal (@length _)) in rxelen.
+  rewrite app_length in rxelen.
+  rewrite length_cons in rxelen.
+  simpl in rxelen.
+  subst g'.
+  intros i j (f' & (ilen & sif & ival) & [-> fend]).
+  unfold lend in fend; subst j.
+  unfold l in ival.
+  simpl in ival, l.
+  rewrite <- rxftltol in ival.
+  rewrite nth_error_app2 in ival.
+  unfold l in fend; rewrite <- rxflen in fend; simpl in fend.
+  assert (i = length (tc_to_l Op ithb_r x g rxg')) by auto with *; subst i.
+  rewrite PeanoNat.Nat.sub_diag in ival.
+  simpl in ival.
+  destruct rgf as [[sbgf|swgf]|dobgf]; try contradiction.
+  apply (rxe_cond (length (tc_to_l Op ithb_r x g rxg')) (S (S (length (tc_to_l Op ithb_r x g rxg'))))).
+  left; repeat esplit; auto with *.
+  rewrite <- rxytltol.
+  rewrite <- rxftltol.
+  rewrite nth_error_app1.
+  rewrite nth_error_app2.
+  rewrite PeanoNat.Nat.sub_diag.
+  simpl; constructor.
+  constructor.
+  rewrite app_length; rewrite length_cons; auto with *.
+  constructor 1; repeat esplit; auto with *.
+  rewrite <- rxytltol.
+  rewrite nth_error_app2.
+  rewrite <- rxflen.
+  rewrite PeanoNat.Nat.add_comm; simpl.
+  rewrite PeanoNat.Nat.sub_diag.
+  simpl; constructor.
+  auto with *.
+  unfold l in fend.
+  rewrite <- rxflen in fend.
+  rewrite PeanoNat.Nat.add_comm in fend; simpl in fend.
+  auto with *.
+  2:{}
+
+plus
+
+  left.
+  destruct sbeqey as [sbey|<-].
+  econstructor 3; do 2 esplit; eauto.
+  constructor 1; assumption.
+  left.
+  destruct sbeqey as [sbey|<-].
+  admit.
+  constructor 2; assumption.
+  
+
+
+
+  clear Heqe.
+  revert e rxe rxe_cond.
+  induction (existT _ y rxy) using (well_founded_induction (step_wf _ _ x)).
+  cbv beta delta [ clos_trans_t_rtl_rel ] in H.
+  intros e rxe rxe_cond [->|[sbey|ithbey]].
+  destruct H as [[sbxy|swxy]|dobxy].
+Qed.
+
+(*
+Definition ithb_alt2: relation Op :=
   (sb^? ⨾ (`↑ dob ∪ (sw ⨾ sb^?)))⁺.
+*)
 
 (*
 HB:
@@ -577,9 +1178,6 @@ identical. Strongly happens before essentially excludes consume operations. — 
 *)
 
 Definition shb := (sb ∪ sw)⁺.
-
-
-(* can we assume the following for non-atomic too? surely non-atomics are SC-local too *)
 
 (*
 COHERENCE:
@@ -641,7 +1239,6 @@ location immediately previous.
   sb rw: in rb
   sb rr (diff writes): in rb;mo?;rf
   sb rr (same writes): have same rf & rb just need to sequence them
-
 *)
 
 Lemma rw_finite: set_finite (A:=ReadWrite) set_full.
@@ -927,44 +1524,6 @@ Proof.
     rewrite <- rffy in *.
     subst f.
     eapply irr; eauto.
-  (*
-  assert (tra_sclp: forall P, transitive (proj1_sig (P:=P) ↓ scl)).
-    intros P x y z rxy ryz.
-    esplit.
-    apply sig_ext.
-  *)
-
-  (*
-  assert (tra_sclloc: forall l, transitive (restr_rel (loc ↓₁ eq l) scl)).
-    intros l x y z [rxy [xloc yloc]] [ryz [_ zloc]].
-    esplit; auto.
-    eapply transitive_ct; eauto.
-
-  assert (scrt_loc: forall l x y dom,
-    tot_ext (filter (eqb_loc l) dom) (restr_rel (loc ↓₁ eq l) scl) x y ->
-    loc x = l).
-    intros l x y dom rxy.
-    revert x y rxy.
-    induction dom.
-    intros x y rxy.
-    simpl in rxy.
-    apply -> clos_trans_of_transitive in rxy; auto.
-    destruct rxy as [rxy [xloc yloc]]; auto.
-    intros x y rxy.
-    simpl in rxy.
-    destruct (eqb_loc l a) eqn:aeq.
-    simpl in rxy.
-    destruct rxy as [rxy|[rxa rnya]].
-    apply (IHdom x y).
-    apply clos_trans_of_transitive; auto.
-    apply tot_ext_trans.
-    apply clos_refl_transE in rxa as [<-|rxa].
-    apply PeanoNat.Nat.eqb_eq in aeq; auto.
-    eapply IHdom.
-    eapply clos_trans_of_transitive; eauto.
-    apply tot_ext_trans.
-    eapply IHdom; eauto.
-  *)
 
   assert (irr_sclt: irreflexive sclt).
     intros x [l' [_ (x' & x'' & rxx & xx & <-)]].
@@ -1550,16 +2109,31 @@ Conjecture race_free:
     IsWrite x \/ IsWrite y ->
     thread x = thread y /\ sb^⋈? x y \/
     thread x <> thread y /\ (~IsAtomic x \/ ~IsAtomic y) /\ hb^⋈? x y.
-    (*same thread /\ ~sb_sym x y,
-      diff thread /\ (~IsAtomic x \/ ~IsAtomic y) /\ ~hb_sym x y.*)
 
 (*
+DRF:
+[ Note: It can be shown
+that programs that correctly use mutexes and memory_order_seq_cst operations to prevent all data races
+and use no other synchronization operations behave as if the operations executed by their constituent threads
+were simply interleaved, with each value computation of an object being taken from the last side effect on that
+object in that interleaving. This is normally referred to as “sequential consistency”. However, this applies only
+to data-race-free programs, and data-race-free programs cannot observe most program transformations that
+do not change single-threaded program semantics. In fact, most single-threaded program transformations
+continue to be allowed, since any program that behaves differently as a result must perform an undefined
+operation. — end note ]
+
 [ Note: memory_order_seq_cst ensures sequential consistency only for a program that is free of data races
 and uses exclusively memory_order_seq_cst operations. Any use of weaker ordering will invalidate this
 guarantee unless extreme care is used. In particular, memory_order_seq_cst fences ensure a total order only
 for the fences themselves. Fences cannot, in general, be used to restore sequential consistency for atomic
 operations with weaker ordering specifications. — end note ]
 *)
+
+Lemma sc_per_loc:
+  exists scl: relation ReadWrite,
+    (forall l, strict_total_order (loc ↓₁ (eq l)) scl) /\
+    restr_eq_rel loc (`↓ sb) ⊆ scl /\
+    rf ⊆ immediate (restr_eq_rel loc (⦗`↓₁ IsWrite⦘ ⨾ scl)).
 
 (*
 VSE:
@@ -1573,8 +2147,6 @@ or bit-field is visible, then the behavior is either unspecified or undefined. �
 that operations on ordinary objects are not visibly reordered. This is not actually detectable without data
 races, but it is necessary to ensure that data races, as defined below, and with suitable restrictions on the use
 of atomics, correspond to data races in a simple interleaved (sequentially consistent ) execution. —end note ]
-
-
 
 [ Note: The value observed by a load of an atomic depends on the “happens before” relation, which depends
 on the values observed by loads of atomics. The intended reading is that there must exist an association of
@@ -1598,21 +2170,6 @@ output is actually delivered before a program waits for input. What constitutes 
 implementation-defined.
 
 These collectively are referred to as the observable behavior of the program.
-
-The value of an object visible to a thread T at a particular point is the initial value of the object, a value
-assigned to the object by T, or a value assigned to the object by another thread, according to the rules
-below.
-
-DRF:
-[ Note: It can be shown
-that programs that correctly use mutexes and memory_order_seq_cst operations to prevent all data races
-and use no other synchronization operations behave as if the operations executed by their constituent threads
-were simply interleaved, with each value computation of an object being taken from the last side effect on that
-object in that interleaving. This is normally referred to as “sequential consistency”. However, this applies only
-to data-race-free programs, and data-race-free programs cannot observe most program transformations that
-do not change single-threaded program semantics. In fact, most single-threaded program transformations
-continue to be allowed, since any program that behaves differently as a result must perform an undefined
-operation. — end note ]
 
 Two accesses to the same object of type volatile std::sig_atomic_t do not result in a data race if
 both occur in the same thread, even if one or more occurs in a signal handler. For each signal handler
