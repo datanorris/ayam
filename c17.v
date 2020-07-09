@@ -554,6 +554,8 @@ This is a constraint on the construction of the path in sb ∪ dob ∪ sw.
 - Express it's construction as a list
 - Define relations on the construction of the transitive closure
   - relations on indices of the list
+
+Rather more difficult than anticipated.
 *)
 
 Inductive clos_trans_t {A : Type} (R : A -> A -> Type) (x : A) : A -> Type :=
@@ -844,12 +846,12 @@ Proof.
     destruct (clos_trans_t_rtl_error _ _ _ _ rxy2_2) as [[foo bar]|]; discriminate rxy2tleq.
   assert (tc_to_l_rtl_eq:
     forall A R (x y: A) (rxy: clos_trans_t R x y),
+      let 'existT _ e rey := clos_trans_t_rhd _ _ _ _ rxy in
       match (clos_trans_t_rtl_error _ _ _ _ rxy) with
-        None => True
-      | Some (existT _ e rxytl) =>
-          let 'existT _ e rey := clos_trans_t_rhd _ _ _ _ rxy in
-          tc_to_l _ _ _ _ rxytl ++ [existT _ (e, y) rey] = tc_to_l _ _ _ _ rxy
-      end).
+        None => []
+      | Some (existT _ _ rxytl) =>
+          tc_to_l _ _ _ _ rxytl
+      end ++ [existT _ (e, y) rey] = tc_to_l _ _ _ _ rxy).
     intros A R x y rxy.
     induction rxy; simpl; auto.
     destruct (clos_trans_t_rhd _ _ _ _ rxy2) as [f' rfz] eqn:rxy2hdeq.
@@ -946,43 +948,6 @@ Proof.
     auto with *.
     contradiction.
 
-  (*
-  assert (clos_trans_t_n1_ind:
-    forall A R (x: A) (P: A -> Prop),
-      (forall y, R x y -> P y) ->
-      (forall y z, R y z -> clos_trans_t R x y -> P y -> P z) ->
-      forall y,
-      clos_trans_t R x y -> P y).
-    intros A R x P base recurs y rxy.
-    pose (make_ind x y rxy rxystep :=
-      existT (fun '(existT _ (x, y) rxy) => clos_trans_t_step_type _ _ _ _ rxy)
-             (existT (fun '(x, y) => clos_trans_t R x y) (x, y) rxy)
-             rxystep).
-    pose (rxystep := clos_trans_t_rstep _ _ _ _ rxy).
-    destruct rxystep as (e & [[<- rxy0]|[rxe rxelt]] & rey) eqn:seq.
-    apply base; assumption.
-    apply recurs with e; auto.
-    pose (rxestep := clos_trans_t_rstep _ _ _ _ rxe).
-    pose (rxyind := make_ind x y rxy rxystep).
-    assert (sr: step_rel (make_ind x e rxe rxestep) rxyind).
-      unfold rxyind.
-      rewrite seq.
-      simpl.
-      reflexivity.
-    clear seq rxelt rey.
-    subst rxystep.
-    revert e rxe rxestep sr.
-    induction rxyind using (well_founded_induction step_wf).
-    intros e rxe rxestep sr.
-    destruct rxestep as (f & [[<- rxf0]|[rxf rxflt]] & rfe) eqn:seq.
-    apply base; auto.
-    apply recurs with f; auto.
-    specialize (H _ sr).
-    apply H with rxf.
-    simpl.
-    reflexivity.
-    *)
-
   intros x y (rxe & rxe_cond).
   remember y as e in rxe, rxe_cond.
   pose (r'xe := existT _ e rxe).
@@ -1019,8 +984,8 @@ Proof.
   induction r'xe as [r'xe IHp] using (well_founded_induction (step_wf _ _ x)).
   assert (rxytltol := tc_to_l_rtl_eq _ _ _ _ rxe').
   assert (rxyhdtl := clos_trans_t_rhd_hd_tl_join _ _ _ _ rxe').
-  destruct (clos_trans_t_rtl_error _ _ _ _ rxe') as [[f rxf']|] eqn:rxetl.
   destruct (clos_trans_t_rhd _ _ _ _ rxe') as [f' rfe] eqn:rxehd.
+  destruct (clos_trans_t_rtl_error _ _ _ _ rxe') as [[f rxf']|] eqn:rxetl.
   subst f'.
   apply (IHp (existT _ f rxf')).
   destruct r'xe; simpl in *; fold e' rxe'.
@@ -1075,13 +1040,13 @@ Proof.
   rewrite PeanoNat.Nat.sub_diag; simpl; constructor.
   constructor 1.
   rewrite app_length; rewrite length_cons; unfold l; simpl; auto with *.
-  left; split; destruct sbeqey as [[sbey fecond]|<-].
-  eapply sb_order; eauto.
-  assumption.
   assert (rxftltol := tc_to_l_rtl_eq _ _ _ _ rxf').
   assert (rxfhdtl := clos_trans_t_rhd_hd_tl_join _ _ _ _ rxf').
-  destruct (clos_trans_t_rtl_error _ _ _ _ rxf') as [[g rxg']|] eqn:rxftl.
   destruct (clos_trans_t_rhd _ _ _ _ rxf') as [g' rgf] eqn:rxfhd.
+  left; split.
+  destruct sbeqey as [[sbey fecond]|<-].
+  eapply sb_order; eassumption.
+  assumption.
   pose (rxflen := rxftltol).
   apply (f_equal (@length _)) in rxflen.
   rewrite app_length in rxflen.
@@ -1092,7 +1057,6 @@ Proof.
   rewrite app_length in rxelen.
   rewrite length_cons in rxelen.
   simpl in rxelen.
-  subst g'.
   intros i j (f' & (ilen & sif & ival) & [-> fend]).
   unfold lend in fend; subst j.
   unfold l in ival.
@@ -1100,18 +1064,25 @@ Proof.
   rewrite <- rxftltol in ival.
   rewrite nth_error_app2 in ival.
   unfold l in fend; rewrite <- rxflen in fend; simpl in fend.
-  assert (i = length (tc_to_l Op ithb_r x g rxg')) by auto with *; subst i.
+  rewrite PeanoNat.Nat.add_comm in fend; apply (f_equal pred) in fend; simpl in fend.
+  subst i.
   rewrite PeanoNat.Nat.sub_diag in ival.
   simpl in ival.
   destruct rgf as [[sbgf|swgf]|dobgf]; try contradiction.
-  apply (rxe_cond (length (tc_to_l Op ithb_r x g rxg')) (S (S (length (tc_to_l Op ithb_r x g rxg'))))).
-  left; repeat esplit; auto with *.
+  apply (rxe_cond (pred (length l)) (S (length l))).
+  left; repeat esplit; unfold l; auto with *.
   rewrite <- rxytltol.
   rewrite <- rxftltol.
   rewrite nth_error_app1.
   rewrite nth_error_app2.
+  rewrite app_length.
+  rewrite length_cons; simpl.
+  rewrite PeanoNat.Nat.add_comm; simpl.
   rewrite PeanoNat.Nat.sub_diag.
   simpl; constructor.
+  rewrite app_length.
+  rewrite length_cons; simpl.
+  rewrite PeanoNat.Nat.add_comm; simpl.
   constructor.
   rewrite app_length; rewrite length_cons; auto with *.
   constructor 1; repeat esplit; auto with *.
@@ -1126,28 +1097,50 @@ Proof.
   rewrite <- rxflen in fend.
   rewrite PeanoNat.Nat.add_comm in fend; simpl in fend.
   auto with *.
-  2:{}
-
-plus
-
   left.
-  destruct sbeqey as [sbey|<-].
-  econstructor 3; do 2 esplit; eauto.
+  destruct sbeqey as [[sbey fecond]|<-].
+  constructor 3; do 2 esplit; eassumption.
   constructor 1; assumption.
+  destruct sbeqey as [[sbey fecond]|<-].
+  exfalso; apply (fecond
+    (pred (length (tc_to_l Op ithb_r x e' rxe')))
+    (length (tc_to_l Op ithb_r x e' rxe'))).
+  repeat esplit.
+  1-4: rewrite <- rxytltol.
+  1-4: rewrite app_length.
+  1-4: rewrite length_cons.
+  1-4: auto with *.
+  rewrite nth_error_app2.
+  rewrite PeanoNat.Nat.add_comm.
+  rewrite PeanoNat.Nat.sub_diag.
+  simpl; constructor.
+  auto with *.
   left.
-  destruct sbeqey as [sbey|<-].
-  admit.
-  constructor 2; assumption.
-  
-
-
-
-  clear Heqe.
-  revert e rxe rxe_cond.
-  induction (existT _ y rxy) using (well_founded_induction (step_wf _ _ x)).
-  cbv beta delta [ clos_trans_t_rtl_rel ] in H.
-  intros e rxe rxe_cond [->|[sbey|ithbey]].
-  destruct H as [[sbxy|swxy]|dobxy].
+  constructor 2; eassumption.
+  subst f'.
+  destruct ncond as [ithbey|[rxe_cond sbeqey]].
+  destruct rfe as [[sbfe|swfe]|dobfe].
+  econstructor 4; repeat esplit; eauto.
+  econstructor 5; repeat esplit; vauto.
+  econstructor 5; repeat esplit; vauto.
+  destruct rfe as [[sbfe|swfe]|dobfe].
+  exfalso; apply (rxe_cond 0 1).
+  simpl in rxytltol.
+  right; repeat esplit; auto with *.
+  constructor 1.
+  repeat esplit; auto with *.
+  1-3: rewrite <- rxytltol; simpl.
+  1-3: auto.
+  destruct sbeqey as [[sbey ndobey]|<-].
+  constructor 3; do 2 esplit; eauto.
+  constructor 1; auto.
+  destruct sbeqey as [[sbey ndobey]|<-].
+  exfalso; apply (ndobey 0 1).
+  simpl in rxytltol.
+  repeat esplit; auto with *.
+  1-3: rewrite <- rxytltol; simpl.
+  1-3: auto.
+  constructor 2; auto.
 Qed.
 
 (*
