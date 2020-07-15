@@ -346,6 +346,41 @@ Next Obligation.
   destruct r as [[]]; auto.
 Defined.
 
+Lemma rf_write: forall x y, rf x y -> IsWrite (`x).
+Proof.
+  intros x y [xir rfxy].
+  do 2 apply (f_equal (@proj1_sig _ _)) in rfxy; cbn in rfxy.
+  destruct y as [[[] (ev & rfw & fwf)]]; try discriminate.
+  all: specialize (rfw eq_refl) as rfw'; cbn in rfw', rfxy.
+  all: unfold IsWrite.
+  all: subst from0; assumption.
+Qed.
+
+Lemma rf_eq_loc: forall x y, rf x y -> loc x = loc y.
+Proof.
+  intros x y [yir rfxy].
+  subst x; symmetry.
+  assert (y = AR2RW (exist _ (`y) yir)).
+    apply sig_ext; reflexivity.
+  replace y at 1.
+  assert (yeq: forall o1 o2, exist (fun x => IsRead x) (`y) yir = (exist _ (exist _ (``y) o1) o2)).
+    intros o1 o2.
+    do 2 apply sig_ext; simpl.
+    reflexivity.
+  rewrite <- yeq.
+  apply from_eq_loc.
+Qed.
+
+(*
+RMW-ATOMIC:
+Atomic read-modify-write operations shall always read the last value (in the modification order) written
+before the write associated with the read-modify-write operation.
+*)
+
+Conjecture rmw_atomic: `↑ rf ⨾ ⦗IsRMW⦘ ⊆ `↑ (immediate mo).
+
+(* rf is made acyclic by our inductive definition *)
+
 Lemma rf_acy: acyclic rf.
 Proof.
   assert (d:
@@ -407,6 +442,36 @@ Proof.
   eauto.
 Qed.
 
+(* in the C++ standard rf is acyclic due to rmw_atomic *)
+
+Lemma rf_acy_by_rmw: acyclic rf.
+Proof.
+  assert (rfmo: forall x y, rf⁺ x y -> IsWrite (`x) /\ ((`↑ mo) (`x) (`y) \/ ~IsWrite (`y))).
+    intros x y rxy.
+    induction rxy as [x y rxy|x e y rxe [xiw [(x' & e' & moxe & xx & ee)|enw]]
+                                    rey [eiw [(e'' & y' & moey & ee' & yy)|ynw]]].
+    assert (xiw := rf_write _ _ rxy).
+    split; [assumption|].
+    set (y' := y).
+    destruct (rxy) as [yir _], y as [[[]]]; try discriminate.
+    1-2: cbn in yir |- *.
+    1-2: auto.
+    destruct (rmw_atomic (`x) (`y')) as (x' & y'' & [moxy imm] & xx & yy).
+    do 3 esplit; eauto.
+    left; repeat esplit; eauto.
+    1-4: try contradiction; split; auto.
+    rewrite <- ee' in ee; apply sig_ext in ee; subst e''.
+    left; repeat esplit.
+    eapply (mo_total_order_per_loc 0).
+    3-4: eauto.
+    1-2: eauto.
+  intros x rxx.
+  specialize (rfmo _ _ rxx) as [xiw [(x' & x'' & moxx & xx & xx')|xnw]].
+  rewrite <- xx' in xx; apply sig_ext in xx; subst x''.
+  eapply (mo_total_order_per_loc 0); eauto.
+  contradiction.
+Qed.
+
 (*
 CD:
 An evaluation A carries a dependency to an evaluation B if
@@ -426,14 +491,6 @@ Assume the operator conditions are modelled as chain of read-froms
 *)
 
 Definition cd := (rf ∩ (`↓ sb))⁺.
-
-(*
-RMW-ATOMIC:
-Atomic read-modify-write operations shall always read the last value (in the modification order) written
-before the write associated with the read-modify-write operation.
-*)
-
-Conjecture rmw_atomic: `↑ rf ⨾ ⦗IsRMW⦘ ⊆ `↑ (immediate mo).
 
 (*
 DOB:
@@ -1153,9 +1210,6 @@ HB:
 An evaluation A happens before an evaluation B (or, equivalently, B happens after A) if:
  — A is sequenced before B, or
  — A inter-thread happens before B.
-The implementation shall ensure that no program execution demonstrates a cycle in the “happens before”
-relation. [ Note: This cycle would otherwise be possible only through the use of consume operations. — end
-note ]
 *)
 
 Definition hb := sb ∪ ithb.
@@ -1166,8 +1220,6 @@ An evaluation A strongly happens before an evaluation B if either
  — A is sequenced before B, or
  — A synchronizes with B, or
  — A strongly happens before X and X strongly happens before B.
-[ Note: In the absence of consume operations, the happens before and strongly happens before relations are
-identical. Strongly happens before essentially excludes consume operations. — end note ]
 *)
 
 Definition shb := (sb ∪ sw)⁺.
@@ -1863,70 +1915,132 @@ Proof.
 Qed.
 
 (*
-SHB acyclic
-- sb is acyclic
-- sw joins threads with certain mo* ⨾ rf release sequence
-  - release sequence is a subset of sb* ⨾ rmw* ⨾ rf
-  - the first rmw* happens after all previous things (sb ⊆ shb)
-  - the subsequent rmw* must not happen before the first write (coherence_ww)
-  - the read must not happen before the last rmw* (coherence_rf)
-  - the read must not happen before the first rmw (coherence_rw)
-  - the last element of sw must not happen before the first element (sb ⊆ shb)
-  - any later writes to the same location in shb:
-    - must not happen before the first rmw* (coherence_ww)
-    - must not happen before any rmw* (rmw_atomic)
+HB/SHB CYCLES:
+The implementation shall ensure that no program execution demonstrates a cycle in the “happens before”
+relation. [ Note: This cycle would otherwise be possible only through the use of consume operations. — end
+note ]
+
+We need existential quantification on sb/rf consistent with other constraints that exhibits a cycle.
+
+ [ Note: In the absence of consume operations, the happens before and strongly happens before relations are
+identical. Strongly happens before essentially excludes consume operations. — end note ]
+
+We can assert an equivalence on hb with a superset of shb easily enough, but would need path construction
+analysis to assert an equivalence on shb.
 *)
+
+Lemma shbb: shb ≡ (sb ∪ (sb^? ⨾ sw ⨾ sb^?)⁺).
+Proof.
+  split.
+  {
+    intros x y rxy.
+    induction rxy as
+      [x y [sbxy|swhb]|
+        x y z
+          rxy [sbxy|(e & [->|itfy]%clos_refl_transE & (e' & [<-|sbxe] & e'' & swee' & [->|sbee'']))%t_rt_step]
+          ryz [sbyz|(f & (f' & [<-|sbyf] & f'' & swff' & [->|sbff'']) & [->|itfz]%clos_refl_transE)%t_step_rt]].
+    left; assumption.
+    right; constructor 1; do 2 esplit; [|do 2 esplit]; eauto.
+    left; eapply sb_order; eauto.
+    all: clear rxy ryz.
+    all: right.
+    all: repeat (
+      try repeat match goal with
+        H: sb ?x ?y, H2: sb ?y ?z |- _ =>
+          assert (sb x z); [eapply sb_order; eauto|clear H H2]
+      | H: sb ?x ?y, H2: sw ?y ?z, H3: sb ?z ?e |- _ ?x _ =>
+          assert ((sb^? ⨾ sw ⨾ sb^?) x e); [do 2 esplit; [|do 2 esplit]; eauto|clear H H2 H3]
+      | H: sb ?x ?y, H2: sw ?y ?z |- _ ?x _ =>
+          assert ((sb^? ⨾ sw ⨾ sb^?) x z); [do 2 esplit; [|do 2 esplit]; eauto|clear H H2]
+      | H: sw ?x ?y, H2: sb ?y ?z |- _ ?x _ =>
+          assert ((sb^? ⨾ sw ⨾ sb^?) x z); [do 2 esplit; [|do 2 esplit]; eauto|clear H H2]
+      | H: sw ?x ?y |- _ ?x _ =>
+          assert ((sb^? ⨾ sw ⨾ sb^?) x y); [do 2 esplit; [|do 2 esplit]; eauto|clear H]
+      end;
+      try (idtac + constructor 1; eauto; solve [idtac]);
+      try (econstructor 2; [idtac + econstructor 1; eauto; solve [idtac]|])).
+  }
+  intros x y [sbxy|swxy].
+  constructor 1; left; auto.
+  induction swxy as [x y (e & sbxe & f & swef & sbfy)|].
+  {
+    all: destruct sbxe as [<-|sbxe]; [|econstructor 2; [constructor 1; left; eauto|]].
+    all: destruct sbfy as [<-|sbfy]; [|econstructor 2; [|constructor 1; left; eauto]].
+    all: constructor 1; right; auto.
+  }
+  econstructor 2; eauto.
+Qed.
+
+Lemma shb_hb: shb ⊆ hb.
+Proof.
+  intros x y [sbxy|shbbxy]%shbb.
+  left; auto.
+  right.
+  induction shbbxy as [x y (e & [<-|sbxe] & f & swef & [->|sbfz])|x z y rxz IHxz rzy IHzy].
+  constructor 1; auto.
+  constructor 3; esplit; esplit; eauto.
+  constructor 4; esplit; esplit; [|constructor 1]; eauto.
+  constructor 4; esplit; esplit; [|constructor 3; esplit; esplit]; eauto.
+  constructor 5; esplit; esplit; eauto.
+Qed.
+
+Lemma hb_shb: hb ≡ (shb ∪ (hb^? ⨾ `↑ dob ⨾ ithb^?)).
+Proof.
+  split.
+  intros x y [sbxy|ithbxy].
+  left; constructor 1; left; assumption.
+  induction ithbxy using ithb_my_ind.
+  left; constructor 1; right; assumption.
+  right; do 2 esplit; [|do 2 esplit]; eauto.
+  destruct H as (e & swxe & sbey).
+  left; econstructor 2; constructor 1; [right|left]; eauto.
+  clear ithbxy; destruct IHithbxy as [shbey|(e' & [<-|[sbee|ithbee]] & ithbey)].
+  left; econstructor 2; [constructor 1; left|]; eauto.
+  right; do 2 esplit; [right; left|]; eauto.
+  right; do 2 esplit; [right; left; eapply sb_order|]; eauto.
+  right; do 2 esplit; [right; right; econstructor 4; do 2 esplit|]; eauto.
+  destruct IHithbxy1 as [shbxe|(c & hbxc & d & dobcd & ithbde)].
+  destruct IHithbxy2 as [shbey|(f & [<-|[sbef|ithbef]] & ithbcy)].
+  left; econstructor 2; eauto.
+  right; do 2 esplit; [right; right|]; eauto.
+  apply shbb in shbxe as [sbxe|swxe].
+  right; do 2 esplit; [right; left; eapply sb_order|]; eauto.
+  apply t_rt_step in swxe as (b & swxb & c & sbbc & d & swcd & sbde).
+  assert (ithbbe: ithb b f).
+    destruct sbbc as [->|sbbc]; [|econstructor 4; do 2 esplit; eauto].
+    1,2: econstructor 3; do 2 esplit; eauto.
+    1,2: destruct sbde as [->|sbde]; [|eapply sb_order]; eauto.
+  clear c d sbbc swcd sbde sbef.
+  right; do 2 esplit; [right; right|eauto].
+  apply clos_refl_transE in swxb as [<-|swxb]; [|econstructor 5; exists b; esplit]; eauto.
+  clear ithbxy1 ithbxy2 ithbcy ithbbe e f y.
+  induction swxb as [x y (c & sbxc & d & swcd & sbdy)|].
+  destruct sbxc as [->|sbxc]; [|econstructor 4; do 2 esplit; eauto].
+  1,2: destruct sbdy as [->|sbdy]; [econstructor 1|econstructor 3; do 2 esplit]; eauto.
+  econstructor 5; do 2 esplit; eauto.
+  right; do 2 esplit; [right; right|eauto].
+  econstructor 5; do 2 esplit; eauto.
+  right; do 2 esplit; [|do 2 esplit]; eauto.
+  right; destruct ithbde as [<-|ithbde]; [|econstructor 5; do 2 esplit]; eauto.
+
+  intros x y [shbxy|(e & hbxe & f & dobdf & ithbfy)].
+  apply shbb in shbxy as [sbxy|swxy].
+  left; assumption.
+  right.
+  induction swxy as [x y (d & sbxd & e & swde & sbey)|].
+  destruct sbxd as [->|sbxd]; [|econstructor 4; do 2 esplit; eauto].
+  1,2: destruct sbey as [->|sbey]; [econstructor 1|econstructor 3; do 2 esplit]; eauto.
+  econstructor 5; do 2 esplit; eauto.
+  right.
+  destruct ithbfy as [<-|ithbfy]; [|econstructor 5; do 2 esplit; eauto].
+  1,2: destruct hbxe as [<-|[sbxe|ithbxe]].
+  1,4: constructor 2; auto.
+  1,3: constructor 4; do 2 esplit; [|constructor 2]; eauto.
+  1,2: constructor 5; do 2 esplit; [|constructor 2]; eauto.
+Qed.
 
 Lemma shb_acy: acyclic shb.
 Proof.
-  assert (shbb: shb ≡ (sb ∪ (sb^? ⨾ sw ⨾ sb^?)⁺)); [split|].
-    {
-      intros x y rxy.
-      induction rxy as
-        [x y [sbxy|swhb]|
-          x y z
-            rxy [sbxy|(e & [->|itfy]%clos_refl_transE & (e' & [<-|sbxe] & e'' & swee' & [->|sbee'']))%t_rt_step]
-            ryz [sbyz|(f & (f' & [<-|sbyf] & f'' & swff' & [->|sbff'']) & [->|itfz]%clos_refl_transE)%t_step_rt]].
-      left; assumption.
-      right; constructor 1; do 2 esplit; [|do 2 esplit]; eauto.
-      left; eapply sb_order; eauto.
-      all: clear rxy ryz.
-      all: right.
-      all: repeat (
-        try repeat match goal with
-          H: sb ?x ?y, H2: sb ?y ?z |- _ =>
-            assert (sb x z); [eapply sb_order; eauto|clear H H2]
-        | H: sb ?x ?y, H2: sw ?y ?z, H3: sb ?z ?e |- _ ?x _ =>
-            assert ((sb^? ⨾ sw ⨾ sb^?) x e); [do 2 esplit; [|do 2 esplit]; eauto|clear H H2 H3]
-        | H: sb ?x ?y, H2: sw ?y ?z |- _ ?x _ =>
-            assert ((sb^? ⨾ sw ⨾ sb^?) x z); [do 2 esplit; [|do 2 esplit]; eauto|clear H H2]
-        | H: sw ?x ?y, H2: sb ?y ?z |- _ ?x _ =>
-            assert ((sb^? ⨾ sw ⨾ sb^?) x z); [do 2 esplit; [|do 2 esplit]; eauto|clear H H2]
-        | H: sw ?x ?y |- _ ?x _ =>
-            assert ((sb^? ⨾ sw ⨾ sb^?) x y); [do 2 esplit; [|do 2 esplit]; eauto|clear H]
-        end;
-        try (idtac + constructor 1; eauto; solve [idtac]);
-        try (econstructor 2; [idtac + econstructor 1; eauto; solve [idtac]|])).
-    }
-    intros x y [sbxy|swxy].
-    constructor 1; left; auto.
-    induction swxy as [x y (e & sbxe & f & swef & sbfy)|].
-    {
-      all: destruct sbxe as [<-|sbxe]; [|econstructor 2; [constructor 1; left; eauto|]].
-      all: destruct sbfy as [<-|sbfy]; [|econstructor 2; [|constructor 1; left; eauto]].
-      all: constructor 1; right; auto.
-    }
-    econstructor 2; eauto.
-  assert (shb_hb: shb ⊆ hb).
-    intros x y [sbxy|shbbxy]%shbb.
-    left; auto.
-    right.
-    induction shbbxy as [x y (e & [<-|sbxe] & f & swef & [->|sbfz])|x z y rxz IHxz rzy IHzy].
-    constructor 1; auto.
-    constructor 3; esplit; esplit; eauto.
-    constructor 4; esplit; esplit; [|constructor 1]; eauto.
-    constructor 4; esplit; esplit; [|constructor 3; esplit; esplit]; eauto.
-    constructor 5; esplit; esplit; eauto.
   assert (sw_nshb: forall x y, (sb^? ⨾ sw ⨾ sb^?) x y -> ~ shb^? y x).
     intros w z (x & sbwx & y & swxy & sbyz) rzw.
     destruct swxy as (x' & [<- xrel] & e & sbxe & f & (e' & f' & rsef & <- & <-) & g & rffg & y' & sbgy & [-> yacq]).
@@ -1986,18 +2100,6 @@ Proof.
     right; constructor 1; left; auto.
     right; auto.
     right; econstructor 2; [econstructor 1; left|]; eauto.
-  (*
-  assert (shbs_nshbs: forall x y (rxy: shbs x y), ~shb^? y x).
-    intros x y rxy ryx.
-    destruct rxy as [sbxy|swxy], ryx as [<-|shbyx].
-    eapply sb_order; eauto.
-    do 2 eapply sb_order; eauto.
-    apply sw_nshb in swyx; apply swyx; right; constructor 1; left; auto.
-    apply sw_nshb in swxy; apply swxy; left; auto.
-    1,2: apply sw_nshb in swxy; apply swxy; right; constructor 1.
-    left; auto.
-    right; auto.
-  *)
   intros x rxy.
   apply -> clos_trans_of_transitive in rxy; [|apply transitive_ct].
   set (ryx := rxy).
@@ -2021,6 +2123,8 @@ Proof.
   econstructor 2; eauto.
 Qed.
 
+Conjecture hb_acyclic: acyclic hb.
+
 (*
 SC:
 There shall be a single total order S on all memory_order_seq_cst operations, consistent with the “happens
@@ -2038,8 +2142,11 @@ that does include lock and unlock operations, since the ordering between those i
 
 Conjecture sc: relation {o: Op | IsSC o}.
 Conjecture sc_total_order: strict_total_order set_full sc.
-Conjecture sc_consistent: (`sc ⊆ `sc \ (hb ∪ `mo)⁻¹)%rel.
-Conjecture sc_read_exclusions: rf ⊆ rf \ (`sc⁻¹ ∪ (`sc ∩ `mo) ⨾ (`sc ∩ `mo) ∪ hb ⨾ immediate (`sc ∩ `mo))%rel.
+Conjecture sc_consistent: `↑ sc ⊆ `↑ sc \ (hb ∪ `↑ mo)⁻¹.
+Conjecture sc_read_exclusions: rf ⊆ rf \ `↓
+  (`↑ sc⁻¹ ∪
+   (`↑ sc ∩ `↑ mo) ⨾ (`↑ sc ∩ `↑ mo) ∪
+   hb ⨾ immediate (`↑ sc ∩ `↑ mo)).
 
 (*
 SC-Fence:
@@ -2058,9 +2165,9 @@ memory_order_seq_cst fences X and Y such that A is sequenced before X, Y is sequ
 precedes Y in S, then B observes either the effects of A or a later modification of M in its modification order.
 *)
 
-Conjecture sc_fence_1: rf ⊆ rf \ (`mo ⨾ `sc ⨾ ⦗IsFence⦘ ⨾ sb ⨾ ⦗IsAtomic⦘)%rel.
-Conjecture sc_fence_2: rf ⊆ rf \ (`mo ⨾ ⦗IsAtomic⦘ ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `sc)%rel.
-Conjecture sc_fence_3: rf ⊆ rf \ (`mo ⨾ ⦗IsAtomic⦘ ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `sc ⨾ ⦗IsFence⦘ ⨾ sb ⨾ ⦗IsAtomic⦘)%rel.
+Conjecture sc_fence_1: rf ⊆ rf \ `↓ (`↑ mo ⨾ `↑ sc ⨾ ⦗IsFence⦘ ⨾ sb ⨾ ⦗IsAtomic⦘).
+Conjecture sc_fence_2: rf ⊆ rf \ `↓ (`↑ mo ⨾ ⦗IsAtomic⦘ ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `↑ sc).
+Conjecture sc_fence_3: rf ⊆ rf \ `↓ (`↑ mo ⨾ ⦗IsAtomic⦘ ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `↑ sc ⨾ ⦗IsFence⦘ ⨾ sb ⨾ ⦗IsAtomic⦘).
 
 (*
 SC-Fence:
@@ -2072,9 +2179,9 @@ M if:
 before B, and X precedes Y in S.
 *)
 
-Conjecture sc_fence_4: (`mo ⊆ `mo \ (⦗IsAtomic⦘ ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `sc)⁻¹)%rel.
-Conjecture sc_fence_5: (`mo ⊆ `mo \ (`sc ⨾ ⦗IsFence⦘ ⨾ sb ⨾ ⦗IsAtomic⦘)⁻¹)%rel.
-Conjecture sc_fence_6: (`mo ⊆ `mo \ (⦗IsAtomic⦘ ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `sc ⨾ ⦗IsFence⦘ ⨾ sb ⨾ ⦗IsAtomic⦘)⁻¹)%rel.
+Conjecture sc_fence_4: `↑ mo ⊆ `↑ mo \ (⦗IsAtomic⦘ ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `↑ sc)⁻¹.
+Conjecture sc_fence_5: `↑ mo ⊆ `↑ mo \ (`↑ sc ⨾ ⦗IsFence⦘ ⨾ sb ⨾ ⦗IsAtomic⦘)⁻¹.
+Conjecture sc_fence_6: `↑ mo ⊆ `↑ mo \ (⦗IsAtomic⦘ ⨾ sb ⨾ ⦗IsFence⦘ ⨾ `↑ sc ⨾ ⦗IsFence⦘ ⨾ sb ⨾ ⦗IsAtomic⦘)⁻¹.
 
 (*
 RACE:
@@ -2099,9 +2206,9 @@ Conjecture race_free:
   forall
     (x y: ReadWrite),
     loc x = loc y ->
-    IsWrite x \/ IsWrite y ->
-    thread x = thread y /\ sb^⋈? x y \/
-    thread x <> thread y /\ (~IsAtomic x \/ ~IsAtomic y) /\ hb^⋈? x y.
+    IsWrite (`x) \/ IsWrite (`y) ->
+    thread (`x) = thread (`y) /\ sb^⋈? (`x) (`y) \/
+    thread (`x) <> thread (`y) /\ (~IsAtomic (`x) \/ ~IsAtomic (`y) -> hb^⋈? (`x) (`y)).
 
 (*
 DRF:
@@ -2122,11 +2229,13 @@ for the fences themselves. Fences cannot, in general, be used to restore sequent
 operations with weaker ordering specifications. — end note ]
 *)
 
-Lemma sc_per_loc:
-  exists scl: relation ReadWrite,
-    (forall l, strict_total_order (loc ↓₁ (eq l)) scl) /\
-    restr_eq_rel loc (`↓ sb) ⊆ scl /\
-    rf ⊆ immediate (restr_eq_rel loc (⦗`↓₁ IsWrite⦘ ⨾ scl)).
+Lemma drf_guarantee:
+  exists drf: relation Op,
+    strict_total_order set_full drf /\
+    sb ⊆ drf /\
+    rf ⊆ immediate (restr_eq_rel loc (`↓ (⦗IsWrite⦘ ⨾ drf))).
+Proof.
+Qed.
 
 (*
 VSE:
