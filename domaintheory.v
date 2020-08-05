@@ -1,5 +1,7 @@
 Require Import hahn.Hahn.
 Require Import List.
+Require Import Program.Basics.
+Open Scope program_scope.
 
 Section Definitions.
   Variable B: Type.
@@ -163,9 +165,49 @@ Section Definitions.
   Definition 1.12: [Constructed Domain] Let B be a finitary basis. The domain DB determined
   by B is the partial order D, <= where D is the set of all ideals I over B and <= is the subset
   relation. We will frequently write D instead of DB.
+
+   - Any single element b of B that is downnward closed to produce a tree is isomorphic to a tree in D
+     - the downward closure of b is an ideal in D - since b is the maximum, it's the lub, and any lub
+       found for a finite subset must be already in the closure - it must be <= b, since b is also an
+       upper bound of the subset
+     - the downward closure of any b' <= b is ⊆ the downward closure for b
+     - note these trees can be infinite e.g. downward closing from infinity
+   - any finite consistent subset of B has a least upper bound b, and its ideal is the downward closure
+     of b
+   - any finite inconsistent subset of B is the union of some set of finite consistent subsets which
+     are pairwise inconsistent. The ideal for these subsets is the union of the ideals for the
+     composing consistent subsets
+     - this provides a lub in D where there wasn't one before
+   - any infinite consistent subset of B has the property that all finite subsets are consistent. They
+     will have a lub but it is not necessarily related to the upper bounds of the infinte subset.
+     - If the infinite subset has no lub, a full recursive downnward and finite-lub closure is
+       required here.
+     - If the infinite subset has a maximum, then the finite subset lubs must be <= this maximum
+       so a downward closure on the maximum is sufficient
+     - If the infinite subset has a lub but no maximum, the full recursive closure is required and
+       will not include this lub.
+   - any infinite inconsistent subset of B will be the union of some finite and infinte consistent
+     subsets. Their ideals must be full closed as new finite subset lubs may be added.
+   - we concern ourselves with directed subsets of B
+     - if they are infinite with a maximum, or finite (in which case they have a maximum), then their
+       ideal is the downward closure of the maximum - this produces an isomorphic directed subset in D.
+     - if they have no maximum (progressive), then because all finite subsets are consistent with
+       the directed subset, their lubs must be <= some ub in the directed subset. a downward closure
+       on all elements in the directed set is sufficient to produce its ideal. This is equivalent
+       to the union of the ideals corresponding to each element in the directed set
+   - for directed subsets of D
+     - an ideal is the union of inconsistent finite & infinite operations:
+       - any finite-size ideal is a union of principal ideals that are inconsistent
+       - any infinite-size ideal is a union of principal ideals and progressive directed subsets of B
+         that are inconsistent
+     - any two ideals can be unioned and closed to find an ideal that is least upper bound to them
+       (there can be no smaller ideal that includes both base ideals)
+     - all sets of ideals have a lub
+     - all sets of ideals closed on finite-set lubs are directed sets
+     - the ideal i = B is the maximum of D
   *)
 
-  Definition construct_domain := ⋃₁ i ∈ ideal, fun x => x ≡₁ i.
+  Definition construct_domain := ⋃₁ i ∈ ideal, set_equiv i.
 End Definitions.
 
 Section Definitions.
@@ -179,119 +221,61 @@ Section Definitions.
   Claim 1.13: The least upper bound of two ideals I1 and I2, if it exists, is found by closing
               I1 ∪ I2 to form an ideal over B.
   *)
-  Lemma lub_ideals:
-    forall i1 i2 i12,
-      D i1 ->
-      D i2 ->
-      lub _ set_subset (fun s => s ≡₁ i1 \/ s ≡₁ i2) D i12 ->
-      i12 ≡₁
-        i1 ∪₁ i2 ∪₁
-        ⋃₁ s ∈ (fun s => s ⊆₁ (i1 ∪₁ i2) /\ set_finite s),
-           dom_rel (R ⨾ ⦗lub _ R s set_full⦘).
+
+  Inductive clos_ideal (S: B -> Prop): B -> Prop :=
+    ideal_base x: S x -> clos_ideal S x
+  | ideal_prev x y: clos_ideal S y -> R x y -> clos_ideal S x
+  | ideal_join s b: s ⊆₁ clos_ideal S -> set_finite s -> lub _ R s set_full b -> clos_ideal S b.
+
+  Lemma ideal_clos_ideal: forall S, ideal _ R (clos_ideal S).
   Proof.
-    pose (cons_eps := IndefiniteDescription.constructive_indefinite_description).
-    destruct order_R.
-    intros i1 i2 i12
-           (Di1 & [i1down i1up] & i1Di1 & Di1i1)
-           (Di2 & [i2down i2up] & i2Di2 & Di2i2) [[Di12 i1i2] i12min].
-    match goal with |- _ ≡₁ ?G => pose (i12p := G) end.
-    assert (ideal _ R i12p).
-      red.
-      split.
-      intros e [[i1'|i2']|(se & [sei12 sefin] & b & b' & reb & -> & [_ ubb] & bmin)] bs rbse.
-      left; red; left; apply Di1i1; apply i1down with e; auto.
-      left; red; right; apply Di2i2; apply i2down with e; auto.
-      right; exists se; repeat split; auto.
-      exists b; repeat esplit; eauto.
-      intros S' S'i12 S'fin b lubb.
-      pose (S'i := S' ∩₁ (i1 ∪₁ i2)).
-      pose (S'lub := S' ∩₁ set_compl (i1 ∪₁ i2)).
-      assert (S'eq: S' ≡₁ S'i ∪₁ S'lub).
-        compute; intuition.
-        pose (classic (i1 x \/ i2 x)); intuition.
-      assert (HS'lub: S'lub ⊆₁
-                ⋃₁s ∈ fun s : B -> Prop => s ⊆₁ i1 ∪₁ i2 /\ set_finite s,
-                  dom_rel (R ⨾ ⦗lub B R s set_full⦘)).
-        intros s [slubs ni12]; destruct S'i12 with s; auto.
-        contradiction.
-      pose (S'lubsigs := fun x (hx: S'lub x) => cons_eps _ _ (HS'lub x hx)).
-      pose (S'lubset := S'i ∪₁ fun x => exists e (he: S'lub e), proj1_sig (S'lubsigs e he) x).
-      right; exists S'lubset; repeat split.
-      intros x [sx12|(e' & he' & s'x)].
-      apply sx12.
-      destruct (proj2_sig (S'lubsigs e' he')) as ([s'12 s'fin] & b' & xb).
-      auto.
-      apply set_finite_union; split.
-      assert (SiS: S'i ⊆₁ S').
-        intros x [s'ix]; auto.
-      rewrite SiS; auto.
-      assert (S'lubfin: set_finite S'lub).
-        assert (SlubS: S'lub ⊆₁ S').
-          intros x [s'ix]; auto.
-        rewrite SlubS; auto.
-      destruct S'lubfin as [lS'lub inlS'lub].
-      pose (lS'lubset := flat_map (fun e =>
-        match excluded_middle_informative (S'lub e)
-        with
-          left he =>
-            match proj2_sig (S'lubsigs e he)
-            with
-              conj (conj _ efin) _ =>
-                match cons_eps _ _ efin
-                with
-                  exist _ l _ => l
-                end
-            end
-        | right nhe => nil
-        end) lS'lub).
-      exists lS'lubset.
-      intros x (e & he & se).
-      specialize (inlS'lub e he).
-      subst lS'lubset.
-      induction lS'lub.
-      contradiction.
-      simpl.
-      apply in_or_app.
-      destruct inlS'lub.
-      subst a.
-      left.
-      destruct (excluded_middle_informative (S'lub e)) as [he'|nhe].
-      assert (he = he') by apply proof_irrelevance; subst he'.
-      destruct (proj2_sig (S'lubsigs e he)) as ([se12 sefin] & _).
-      destruct (cons_eps _ _ sefin).
-      auto.
-      contradiction.
-      right; auto.
-
-      unfold lS'lubset; cbn.
-      simpl in s'x12.
-
-      intuition.
-      right. exists S'.
-
+    intros S.
     split.
-    apply i12min.
-    red; red; red.
-    eexists.
-    split.
-    2: {
-      split.
-      intros foo bar; eauto.
-      auto.
-    }
-    red.
-    split.
-    red.
-    intros e [[i1'|i2']|(se & [sei12 sefin] & b & b' & reb & -> & [_ ubb] & bmin)] bs rbse.
-    left; red; left; apply Di1i1; apply i1down with e; auto.
-    left; red; right; apply Di2i2; apply i2down with e; auto.
-    right; exists se; repeat split; auto.
-    exists b; repeat esplit; eauto.
-    intros S' S'i12 S'fin b lubb.
-    apply S'i12; .
+    intros e Se b Rbe.
+    econstructor 2; eauto.
+    intros S' S'S S'fin b lubb.
+    econstructor 3; eauto.
+  Qed.
 
+  Lemma lub_ideals:
+    forall si,
+      lub _ set_subset si D (clos_ideal (⋃₁ i ∈ si, i)).
+  Proof.
+    intros si.
+    repeat split.
+    exists (clos_ideal (⋃₁ i ∈ si, i)); split.
+    apply ideal_clos_ideal.
+    auto.
+    intros s sis x sx.
+    constructor 1; exists s; auto.
+    intros b' (b'' & [b''clos_down b''clos_join] & beq) [_ ubb'] x i12closx.
+    induction i12closx as [x [s [sis sx]]|?|].
+    eapply ubb'; eauto.
+    apply beq; eapply b''clos_down; [apply beq|]; eauto.
+    apply beq; eapply b''clos_join.
+    2, 3: eauto.
+    intros x sx; apply beq; auto.
   Qed.
 
   (*
   Claim 1.14: The domain D determined by a finitary basis B is a complete partial order.
   *)
+
+  Lemma d_cpo: cpo {s: B -> Prop | D s} ((@proj1_sig _ _) ↓ set_subset).
+  Proof.
+    intros S Sdir.
+    pose (S' := fun (s: B -> Prop) => exists ds: D s, S (exist _ s ds)).
+    destruct (lub_ideals S') as [[DS'_clos S'_clos_ub] S'_clos_min].
+    set (S'_clos := clos_ideal (⋃₁ i ∈ S', i)) in *.
+    exists (exist _ S'_clos DS'_clos).
+    repeat split.
+    intros [s Ds] Ss x sx; simpl in *.
+    eapply S'_clos_ub; try esplit; eauto.
+    intros [b' Db'] _ [_ ubb] x bx; simpl in *.
+    eapply S'_clos_min; eauto.
+    split; auto.
+    intros s [Ds Ss] x' sx'.
+    specialize (ubb (exist _ s Ds)); unfold map_rel in ubb; simpl in *.
+    apply ubb; auto.
+  Qed.
+End Definitions.
