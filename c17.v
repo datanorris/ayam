@@ -2377,6 +2377,66 @@ operation. — end note ]
       - if it's SC, it's SC-after the write, and
         - if read is plain, it's HB-after both writes, and the writes are MO-ordered violating coherence-wr
         - if read is SC, violates SC read exclusions
+
+Statement as written:
+  (forall x, IsPln x \/ IsSC x) ->
+  exists drf: relation Op,
+    strict_total_order set_full drf /\
+    sb ⊆ drf /\
+    rf ⊆ immediate (restr_eq_rel loc (`↓ (⦗IsWrite⦘ ⨾ drf))).
+
+meaning "If all operations are plain or SC, the execution is SC-consistent"
+
+We can perhaps prove with a weaker assumption: "If all pairs of different operations on the same location involve only
+plain or SC operations, or neither are writes, or they are hb-ordered with each other, the execution is SC-consistent"
+ - if they are hb-ordered with each other then they might as well be plain, the same restrictions apply
+ - if they are both non-writes, I don't think we examine this scenario in the proof
+
+The stonger DRF guarantee is: "If in all SC-consistent executions of a program P, every race(a, b) has mod(a) = mod(b) = sc,
+then the outcomes of P under C11 coincide with those under SC."
+ - where race(a, b) means a & b are different, on the same location, at least one is a write, and they aren't hb-ordered.
+ - C11-consistent means compliant with all the constraints here except race-freeness
+ - where "outcomes under C11 coincide with those under SC" means every C11-consistent execution is both race-free and SC-consistent
+
+the stronger guaraantee almost follows from the weaker assumption by contradiction because if there was a C11-consistent execution
+that wasn't SC-consistent, then assuming the sc-races-only property, it would be race-free and by the weaker assumption it would
+actually be SC-consistent.
+ - by (A -> B) = (~A \/ B), every pair (a, b) would be either
+   - not race(a, b)
+     - a = b, no assumption required
+     - different loc, no assumption required
+     - both reads, assumption met
+     - hb ordered, assumption met
+   - both sc, assumption met
+
+can we have a C11-consistent execution that is not SC-consistent and doesn't have sc-races-only, where all SC-consistent
+executions do have it? Note that an sc-consistent execution is one acyclic in hb ∪ mo ∪ rf ∪ rb. The only way would be for all
+SC-consistent executions to enforce an hb-ordering on the race via sw/dob by virtue of the restrictions on rf. But it would appear
+that any cycles causing a non-sc execution can be transformed into an sc-execution by altering rfs to break those cycles, in a
+way that would not eliminate the race.
+ - hb ∪ mo is acyclic. NO.
+ - hb ∪ mo ∪ rf ∪ rb is acyclic on the racing location (sc-per-loc)
+ - their union is acyclic NO.
+ - introduce rf ∪ rb from other locations into this relation from start of hb ∪ mo forward
+   - an rf going backwards means a read is going into the future
+     - there is an immediately earlier write that is already 
+     - must be relaxed on one or both ends otherwise it would be in hb
+     - can be corrected with a read of an immediately earlier write that is not sccon-after^? the racing write
+     - this preserves the race
+     - such an immediately earlier write must exist because the racing write and any hb-after writes it might read from must be
+       hb-unrelated to the read (by race definition and coherence-rf), so there must be another write it can read from (initial value
+       if nothing else) that can be considered immediately previous.
+ - an rb going backwards can be corrected by
+   - reading the immediately earlier write that is after the current write, if the racing write is not in between, or
+   - breaking the cycle at some other point
+
+A1sc
+A2rel
+A3sc
+B1sc
+  R(B1)sc
+  R(A1)acq
+  A4rel
 *)
 
 Lemma drf_guarantee:
