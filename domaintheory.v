@@ -464,4 +464,98 @@ Section Definitions.
     intros s' (s'' & [Ds'' Ss''] & s''s').
     eapply sub; eauto.
   Qed.
+
+  (*
+  Definition 1.15: [Principal Ideals] For finitary basis B = [B, <=], the principal ideal determined
+  by b ∈ B, is the ideal Ib such that Ib = {b' ∈ B | b' <= b}.
+  *)
+
+  Definition principal_ideal (b: B) := R⁻¹ b.
+
+  Lemma ideal_principal_ideal: forall b, ideal B R B_fin_basis (principal_ideal b).
+  Proof.
+    intros b.
+    split; unfold transp.
+    intros e Reb e' Re'e.
+    destruct order_R.
+    eapply ord_trans; eauto.
+    intros s sR sfin.
+    destruct B_fin_basis as (foo & bar & slub).
+    destruct (slub s) as [b' b'lub]; auto.
+    exists b; split; hnf; auto.
+    exists b'; split; auto.
+    destruct b'lub as [b'ub bmin].
+    apply bmin; repeat split; auto.
+  Qed.
+
+  (*
+  Theorem 1.16: The principal ideals over a finitary basis B form a finitary basis under the subset
+  ordering.
+  *)
+
+  Lemma principal_ideals_fin_basis:
+    fin_basis {i: B -> Prop & {b: B | i = principal_ideal b} } ((@projT1 _ _) ↓ set_subset).
+  Proof.
+    pose (b_to_ideal := fun x =>
+      existT (fun i => {b: B | i = principal_ideal b})
+             (principal_ideal x)
+             (exist _ x eq_refl)).
+    destruct B_fin_basis as ([Binhab] & [Bcountf Bcountf_spec] & Bfinjoinclosed).
+    repeat split.
+    auto.
+    unshelve eexists.
+    intros [? [b ?]].
+    apply (Bcountf b).
+    simpl.
+    intros [bi [b bi_spec]] [b'i [b' b'i_spec]] bcounteq.
+    specialize (Bcountf_spec b b' bcounteq) as beq; subst b' b'i bi.
+    auto.
+    intros s [slist inslist] [[sub_i [sub sub_spec]] [_ scons]].
+    destruct (Bfinjoinclosed (s ∘ b_to_ideal)) as [b [[_ bub] bmin]].
+    unshelve eexists (map _ slist).
+    intros [? [b ?]].
+    apply b.
+    intros x sbx.
+    unfold compose in sbx.
+    specialize (inslist (b_to_ideal x) sbx).
+    induction slist.
+    contradiction.
+    destruct inslist.
+    subst a.
+    left; auto.
+    right; auto.
+    exists sub.
+    split; hnf; auto.
+    intros b' sb'.
+    specialize (scons (b_to_ideal b') sb').
+    unfold map_rel in scons; simpl in scons.
+    subst sub_i.
+    specialize (scons b').
+    apply scons; compute.
+    destruct order_R; auto.
+    exists (b_to_ideal b).
+    repeat split.
+    intros [b'i [b' b'_spec]] sb'i.
+    unfold map_rel; compute.
+    intros x b'ix.
+    subst b'i.
+    destruct order_R.
+    eapply ord_trans; eauto.
+    intros [b'i [b' ->]] _ [_ b'ub].
+    unfold map_rel in *; simpl in *.
+    compute.
+    intros x rxb.
+    destruct order_R; eapply ord_trans; eauto.
+    apply bmin; hnf; repeat split; auto.
+    intros b'' sb''.
+    eapply b'ub; eauto.
+    compute.
+    destruct order_R; auto.
+  Qed.
+
+  (*
+  Definition 1.17: [Finite Elements] An element e of a cpo D = [D, <=] is finite iff for every
+  directed subset S of D, e = ⋃S implies e ∈ S. The set of finite elements in a cpo D is denoted D0
+  *)
+
 End Definitions.
