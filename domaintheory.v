@@ -179,7 +179,7 @@ Section Definitions.
   by B is the partial order D, <= where D is the set of all ideals I over B and <= is the subset
   relation. We will frequently write D instead of DB.
 
-   - Any single element b of B that is downnward closed to produce a tree is isomorphic to a tree in D
+   - Any single element b of B that is downward closed to produce a tree is isomorphic to a tree in D
      - the downward closure of b is an ideal in D - since b is the maximum, it's the lub, and any lub
        found for a finite subset must be already in the closure - it must be <= b, since b is also an
        upper bound of the subset
@@ -222,7 +222,7 @@ Section Definitions.
 End Definitions.
 
 Section Definitions.
-  Variable B: Set.
+  Variable B: Type.
   Variable R: relation B.
   Variable B_fin_basis: fin_basis B R.
   Variable order_R: order _ R.
@@ -300,11 +300,8 @@ Section Definitions.
        which exists in the union by guarantee of the directed set
   *)
 
-  Lemma d_cpo: cpo {s: B -> Prop | D s} ((@proj1_sig _ _) ↓ set_subset).
+  Lemma fin_basis_least: exists b, lb _ R set_full set_full b.
   Proof.
-    destruct order_R.
-    pose (cons_eps := IndefiniteDescription.constructive_indefinite_description).
-    intros S Sdir.
     pose (BFB := B_fin_basis); destruct BFB as ([Bone] & Bcountable & Bleast & Bleastmin').
     instantiate (1 := ∅).
     exists nil; intros x contra; contradiction.
@@ -312,118 +309,127 @@ Section Definitions.
     constructor.
     intros x contra; contradiction.
     clear Bone.
-    assert (Bleastmin: forall b, R Bleast b).
-      intros b.
-      destruct Bleastmin' as [[_ ?] bmin].
-      apply bmin; hnf; repeat split; auto.
-      intros s contra; contradiction.
-    clear Bleastmin'.
-    assert (DBleast: D (eq Bleast)).
-      split.
-      intros e <- b rbb.
-      eapply ord_antisym; eauto.
-      intros S' S'Bleast S'fin.
-      exists Bleast; repeat split.
-      intros s S's.
-      apply S'Bleast in S's.
-      subst s.
-      apply ord_refl.
-      intros b' _ ubb'.
-      auto.
-    destruct (classic (S ⊆₁ ∅)) as [Semp|Sinhab].
-    exists (exist _ (eq Bleast) DBleast).
+    exists Bleast.
     repeat split.
-    intros s Ss; apply Semp in Ss; contradiction.
-    intros [b' Db'] _ [_ ubb'].
-    destruct (Db') as [Db'down Db'join].
-    intros x <-; simpl.
-    eapply Db'down.
-    apply ideal_nonempty in Db'.
-    assert (b: exists b, b' b).
-      apply NNPP; intros nex; apply Db'.
-      intros b bb'.
-      apply nex.
-      exists b; auto.
-    destruct b as [b bb]; eauto.
-    auto.
-    assert (s: exists s, S s).
-      apply NNPP; intros nex; apply Sinhab.
-      intros s Ss.
-      apply nex.
-      exists s; auto.
-    destruct s as [[Sone DSone] SSone].
-    assert (s: exists s, Sone s).
-      apply NNPP; intros nex; eapply ideal_nonempty.
-      apply DSone.
-      intros s Ss.
-      apply nex.
-      exists s; auto.
-    destruct s as [Sone' SSone'].
-    pose (S' := fun (s: B -> Prop) => exists ds: D s, S (exist _ s ds)).
-    set (S'_clos := ⋃₁ i ∈ S', i).
-    assert (DS'_clos: D S'_clos).
+    intros b _.
+    destruct Bleastmin' as [[_ ?] bmin].
+    apply bmin; hnf; repeat split; auto.
+    intros s' contra; contradiction.
+  Qed.
+
+  Lemma constructed_domain_least:
+    let cons_eps := IndefiniteDescription.constructive_indefinite_description in
+    let Bleast := cons_eps _ _ fin_basis_least in
+    let Dleast := (eq (`Bleast)) in
+    D Dleast /\ lb _ set_subset D set_full Dleast.
+  Proof.
+    intros.
+    destruct order_R.
+    destruct Bleast as [b [foo blb]]; simpl in *.
+    repeat split; auto.
+    intros e <- b' rbb.
+    eapply ord_antisym; eauto.
+    intros s sdleast _.
+    exists b; repeat split; auto.
+    intros b' sb'.
+    apply sdleast in sb'; compute in sb'; subst; auto.
+    intros s Ds b' <-.
+    apply NNPP.
+    intros contra.
+    apply (ideal_nonempty _ R B_fin_basis s); auto.
+    intros s' ss'; apply contra.
+    destruct Ds as [dsdown _].
+    eapply dsdown; eauto.
+  Qed.
+
+  Lemma directed_set_lub: forall (s: _ -> Prop) sone,
+    s sone ->
+    directed {x: B -> Prop | D x} (@proj1_sig _ _ ↓ set_subset) s ->
+    let s_union := (⋃₁i ∈ s, `i) in
+    exists ds: D s_union, lub _ (@proj1_sig _ _ ↓ set_subset) s set_full (exist _ s_union ds).
+  Proof.
+    pose (cons_eps := IndefiniteDescription.constructive_indefinite_description).
+    destruct order_R.
+    intros s [sone Dsone] ssone ds s_union.
+    destruct Dsone as [DSonedown DSonejoin].
+    destruct constructed_domain_least as [DDleast [_ bDleast]].
+    fold cons_eps in DDleast, bDleast.
+    destruct (cons_eps _ _ fin_basis_least) as [Bleast [foo bBleast]]; simpl in *.
+    clear foo.
+    lapply ds; clear ds.
+    intros ds.
+    assert (DSunion: D s_union).
       repeat split.
-      intros e (s' & [Ds' Ss'] & s'e) b rbe.
-      exists s'.
-      repeat esplit; eauto.
+      intros e ([s' Ds'] & Ss' & s'e) b rbe.
+      exists (exist _ s' Ds').
+      repeat esplit; simpl in *; eauto.
       destruct Ds' as [s'down s'join].
       eapply s'down; eauto.
       intros S'' S''sic [S''list inS''list].
       destruct (classic (S'' ⊆₁ ∅)) as [S''null|S''inhab].
       exists Bleast.
-      repeat esplit; hnf; auto.
-      intros s Ss.
+      repeat esplit; eauto.
+      intros s' Ss'.
       exfalso; eapply S''null; eauto.
-      eauto.
-      destruct DSone as [DSonedown DSonejoin].
-      eapply DSonedown; eauto.
+      simpl; apply bDleast; split; auto.
       unshelve evar (SS''list: list (B -> Prop)).
         refine (flat_map (fun x =>
           match excluded_middle_informative (S'' x)
           with
-            left sx => ` (cons_eps _ _ (S''sic x sx)) :: nil
+            left sx => (`` (cons_eps _ _ (S''sic x sx))) :: nil
           | right _ => nil
           end) S''list).
-      assert (S''x_to_set: forall x, S'' x -> exists s, s x /\ In s SS''list).
+      assert (S''x_to_set: forall x, S'' x -> exists s, s x /\ D s /\ In s SS''list).
         intros x S''x.
         pose (S''x' := S''x); apply inS''list in S''x'.
         clear inS''list; subst SS''list.
         induction S''list.
         contradiction.
         destruct S''x' as [->|inS''list].
-        destruct (cons_eps _ _ (S''sic x S''x)) as (s & S's & sx) eqn:seq.
-        exists s.
-        split; simpl; auto.
+        destruct (cons_eps _ _ (S''sic x S''x)) as ([s' Ds'] & S's & sx) eqn:seq.
+        exists (s').
+        split; [|split]; simpl in *; auto.
         apply in_app_l.
         destruct (excluded_middle_informative (S'' x)) as [S''x2|nS''x]; simpl.
         assert (S''x = S''x2) by apply proof_irrelevance; subst.
         rewrite seq; left; auto.
         contradiction.
-        destruct IHS''list as (s & sx & sin); auto.
-        exists s; split; auto.
+        destruct IHS''list as (s' & sx & dx & sin); auto.
+        exists s'; split; [|split]; auto.
         simpl; apply in_app_r; auto.
-      assert (SS''list_S': (flip (@In _)) SS''list ⊆₁ S').
-        intros s inSS''.
+      assert (SS''list_S: (@proj1_sig _ _) ↓₁ (flip (@In _)) SS''list ⊆₁ s).
+        intros [s' Ds'] SS''list_s'.
+        hnf in SS''list_s'; simpl in SS''list_s'.
         clear inS''list S''x_to_set.
         induction S''list.
-        simpl in SS''list; destruct inSS''.
-        apply in_app_or in inSS''; destruct inSS'' as [sina|sinS''list].
+        simpl in SS''list; destruct SS''list_s'.
+        apply in_app_or in SS''list_s'; destruct SS''list_s' as [sina|sinS''list].
         clear IHS''list.
         destruct (excluded_middle_informative (S'' a)) as [S''a|nS''a].
         destruct sina; try contradiction.
-        subst s.
-        match goal with |- S' (` ?G) => pose (s_cond := proj2_sig G) end.
-        destruct s_cond as [[Ds Ss] Sa].
-        exists Ds; auto.
+        subst s'.
+        match goal with |- s (exist _ (` ` ?G) _) => pose (val := G) end.
+        destruct (proj2_sig val) as [Ss Sa].
+        fold val.
+        assert (H: forall A P (e1 e2: {x: A | P x}), `e1 = `e2 -> e1 = e2).
+          intros A P [] [].
+          simpl; intros <-.
+          f_equal.
+          apply proof_irrelevance.
+        rewrite H with (e2 := `val); auto.
         contradiction.
         apply IHS''list; auto.
-      assert (SS''list_S: (@proj1_sig _ _) ↓₁ (flip (@In _)) SS''list ⊆₁ S).
-        intros [s Ds] SS''list_s.
-        hnf in SS''list_s; simpl in SS''list_s.
-        apply SS''list_S' in SS''list_s as [Ds' Ss].
-        assert (Ds = Ds') by apply proof_irrelevance; subst; auto.
-      apply Sdir in SS''list_S; auto.
-      destruct SS''list_S as [[SS''ub [SS''ubdown SS''ubjoin]] [S_S''ub SS''ubub]].
+      pose (ls := SS''list_S).
+      apply ds in ls as [[SS''ub [SS''ubdown SS''ubjoin]] [S_S''ub SS''ubub]].
+      destruct (SS''ubjoin S'') as (b & blub & SS''ubb).
+      intros x S''x.
+      destruct (S''x_to_set x) as (s' & sx & ds' & sSS''list); auto.
+      specialize (SS''ubub (exist _ s' ds')).
+      unfold set_map, map_rel, flip in SS''ubub; simpl in SS''ubub.
+      apply SS''ubub; auto.
+      exists S''list; auto.
+      exists b; split; auto.
+      unshelve eexists (exist _ SS''ub _); split; auto.
       eexists (flat_map (fun s =>
         match excluded_middle_informative (D s)
         with
@@ -432,7 +438,7 @@ Section Definitions.
         end) SS''list).
       intros [x dx] SS''x.
       hnf in SS''x; simpl in SS''x.
-      clear SS''list_S' S''x_to_set.
+      clear S''x_to_set ls SS''list_S.
       induction SS''list; auto.
       simpl.
       destruct SS''x.
@@ -442,27 +448,45 @@ Section Definitions.
       assert (d = dx) by apply proof_irrelevance; subst; simpl; auto.
       contradiction.
       apply in_app_r; auto.
-      destruct (SS''ubjoin S'') as (b & blub & SS''ubb).
-      intros x S''x.
-      destruct (S''x_to_set x) as (s & sx & sSS''list); auto.
-      destruct (SS''list_S' s) as [Ds Ss]; auto.
-      specialize (SS''ubub (exist _ s Ds)).
-      unfold set_map, map_rel, flip in SS''ubub; simpl in SS''ubub.
-      apply SS''ubub; auto.
-      exists S''list; auto.
-      exists b; split; auto.
-      exists SS''ub; split; auto.
-      exists (conj SS''ubdown SS''ubjoin); auto.
-    exists (exist _ S'_clos DS'_clos).
+    exists DSunion.
     repeat split.
-    intros [s Ds] Ss x sx.
+    intros s' Ss x sx.
     simpl in *.
-    exists s; split; auto.
-    exists Ds; auto.
-    intros [s Ds] _ [_ sub].
+    exists s'; split; auto.
+    intros s' _ [_ sub].
     unfold map_rel in sub |- *; simpl in *.
-    intros s' (s'' & [Ds'' Ss''] & s''s').
+    intros b (bs & sbs & bsb).
     eapply sub; eauto.
+    auto.
+    intros []; eauto.
+  Qed.
+
+  Lemma d_cpo: cpo {s: B -> Prop | D s} ((@proj1_sig _ _) ↓ set_subset).
+  Proof.
+    pose (cons_eps := IndefiniteDescription.constructive_indefinite_description).
+    destruct order_R.
+    intros S Sdir.
+    destruct constructed_domain_least as [DDleast [_ bDleast]].
+    fold cons_eps in DDleast, bDleast.
+    destruct (cons_eps _ _ fin_basis_least) as [Bleast [foo bBleast]]; simpl in *.
+    clear foo.
+    destruct (classic (S ⊆₁ ∅)) as [Semp|Sinhab].
+    exists (exist _ _ DDleast).
+    repeat split.
+    intros s Ss; apply Semp in Ss; contradiction.
+    intros [b' Db'] _ [_ ubb'].
+    destruct (Db') as [Db'down Db'join].
+    intros x <-; simpl.
+    eapply Db'down; eauto.
+    apply bDleast; auto.
+    assert (s: exists s, S s).
+      apply NNPP; intros nex; apply Sinhab.
+      intros s Ss.
+      apply nex.
+      exists s; auto.
+    destruct s as [Sone SSone].
+    destruct (directed_set_lub S Sone SSone); auto.
+    eexists; eauto.
   Qed.
 
   (*
@@ -558,4 +582,142 @@ Section Definitions.
   directed subset S of D, e = ⋃S implies e ∈ S. The set of finite elements in a cpo D is denoted D0
   *)
 
+  Definition el_finite :=
+    fun (cpo_d: cpo B R) (e: B) =>
+      forall s, directed _ R s -> lub _ R s set_full e -> s e.
+End Definitions.
+
+Section Definitions.
+  Variable B: Type.
+  Variable R: relation B.
+  Variable B_fin_basis: fin_basis B R.
+  Variable order_R: order _ R.
+  Let D := construct_domain B R B_fin_basis.
+
+  (*
+  Theorem 1.18: An element of the domain D of ideals determined by a finitary basis B is finite
+  iff it is principal.
+  *)
+
+  Lemma finite_principal:
+    el_finite _ _ (d_cpo B R B_fin_basis order_R) ≡₁
+    (fun x => exists e, principal_ideal _ R e ≡₁ x) ∘ (@proj1_sig _ _).
+  Proof.
+    fold D.
+    split.
+    intros i ifin.
+    specialize (ifin i).
+  Qed.
+End Definitions.
+
+  Import PeanoNat.Nat.
+  Lemma foo: ~(forall a b c d, el_finite_principal a b c d).
+  Proof.
+    pose (cons_eps := IndefiniteDescription.constructive_indefinite_description).
+    intros fin_prin.
+    pose (B := (nat + unit)%type).
+    pose (R := fun (x y: B) =>
+      match x, y with
+        _, inr _ => true
+      | inr _, _ => false
+      | inl x', inl y' => x' <=? y'
+      end).
+    pose (max_slist := fun (S: B -> Prop)=>
+      fix lmax slist :=
+        match slist with
+          [] => inl 0
+        | v :: l =>
+          if (excluded_middle_informative (S v))
+          then 
+            match R (lmax l) v with
+              true => v
+            | false => lmax l
+            end
+          else lmax l
+        end).
+    assert (order_R: order _ R).
+      repeat split.
+      intros [n|[]]; simpl; auto with *.
+      apply leb_refl.
+      intros [x|[]] [y|[]] [z|[]]; simpl; auto with *.
+      destruct (leb_spec x y), (leb_spec y z), (leb_spec x z); auto with *.
+      intros [x|[]] [y|[]]; simpl; auto with *.
+      destruct (leb_spec x y), (leb_spec y x); auto with *.
+    assert (total_R: is_total set_full R).
+      intros [x|[]] _ [y|[]] _ _; simpl; auto with *.
+      destruct (leb_spec x y), (leb_spec y x); auto with *.
+    specialize (fin_prin B R).
+    assert (B_fin_basis: fin_basis B R).
+    repeat split.
+    right; constructor.
+    exists (fun v =>
+      match v with
+        inr _ => 0
+      | inl n => n + 1
+      end).
+    intros [x|[]] [y|[]]; auto with *.
+    intros S [slist inslist] Scons.
+    exists (max_slist S slist).
+    destruct order_R.
+    repeat split.
+    intros s Ss.
+    specialize (inslist s Ss).
+    induction slist.
+    contradiction.
+    destruct inslist.
+    subst a; simpl.
+    destruct (excluded_middle_informative (S s)); simpl; auto with *.
+    destruct (R (max_slist S slist) s) eqn:Rslist; simpl; auto with *.
+    destruct (max_slist S slist) as [sp|[]], s as [s|[]]; simpl in *; auto with *.
+    destruct (leb_spec sp s), (leb_spec s sp); auto with *.
+    simpl.
+    destruct (excluded_middle_informative (S a)); simpl; auto with *.
+    destruct (R (max_slist S slist) a) eqn:Rslist; auto with *.
+    destruct (max_slist S slist) as [sp|[]], s as [s|[]], a as [a|[]]; simpl in *; auto with *.
+    destruct (leb_spec s sp), (leb_spec sp a), (leb_spec s a); auto with *.
+    intros b' _ [_ ubb'].
+    cut (S (max_slist S slist) \/ (max_slist S slist) = inl 0).
+    intros []; auto.
+    rewrite H; destruct b' as [b'|[]]; auto.
+    clear inslist.
+    induction slist; auto; simpl.
+    destruct (excluded_middle_informative (S a)); auto; simpl.
+    destruct (R (max_slist S slist) a) eqn:Rslist; auto with *.
+    unshelve edestruct fin_prin as [_ prin_fin]; auto.
+    set (D := construct_domain B R B_fin_basis) in *.
+    assert (inf_prin_ideal: {x: B -> Prop | D x}).
+    exists (principal_ideal B R (inr ())).
+    apply ideal_principal_ideal; auto.
+    specialize (prin_fin inf_prin_ideal).
+    lapply prin_fin.
+    intros elf.
+    pose (prog_ideal := (fun (x: B -> Prop | D x) => ~ proj1_sig x (inr ()))).
+    specialize (elf prog_ideal).
+    apply elf.
+    intros prog_ideal_nemp S Sprog_ideal Sfin.
+  Qed.
+
+  The next theorem identifies the relationship between an ideal and all the principal ideals that
+  approximate it.
+  Theorem 1.19: Let D be the domain determined by a finitary basis B. For any I ∈ D, I = F
+  {I0 ∈ D0
+  | I0 v I} .
+  Proof See Exercise 9. ✷
+  The approximation ordering in a partial order allows us to differentiate partial elements from
+  total elements.
+  Definition 1.20: [Partial and Total Elements] Let B be a partial order. An element b ∈ B
+  is partial iff there exists an element b
+  0 ∈ B such that b 6= b
+  0 and b v b
+  0
+  . An element b ∈ B is total
+  iff for all b
+  0 ∈ B, b v b
+  0
+  implies b = b
+  0
+
+  Definition 1.24: [Isomorphic Partial Orders] Two partial orders A and B are isomorphic,
+  denoted A ≈ B, iff there exists a one-to-one onto function m : A → B that preserves the approximation ordering:
+  ∀a, b ∈ A a vA b ⇐⇒ m(a) vB m(b).
 End Definitions.
