@@ -831,6 +831,8 @@ Section Definitions.
     fold D in D0.
     destruct (principal_ideals_fin_basis _ _ B_fin_basis order_R) as ([D0'inhab] & D0'count & D0'closed).
     destruct (finite_principal _ _ B_fin_basis order_R) as [fin_prin prin_fin].
+
+    (* D0_fin_basis *)
     match goal with |- @ex ?A _ => assert (D0_fin_basis: A) end.
     repeat split.
     destruct D0'inhab as (s & b & spb).
@@ -973,6 +975,7 @@ Section Definitions.
     simpl in *.
     auto.
     exists D0_fin_basis.
+
     assert (D0_prin: forall b, D0 (principal_ideal _ R b)).
       unshelve eexists.
       exists (principal_ideal _ R b).
@@ -980,15 +983,24 @@ Section Definitions.
       simpl; split; auto.
       apply prin_fin; unfold compose; simpl.
       exists b; auto.
-    assert (B_to_D0:
-      isomorphic
+    intros D'.
+
+    (* B to D0 isomorphism *)
+    pose (B_to_D0_T :=
+      (isomorphic
         _ R order_R
-        {s: _ | D0 s} _ (order_proj_subset _ _)).
-    exists (fun b => exist _ (principal_ideal _ R b) (D0_prin _)).
+        {s: _ | D0 s} _ (order_proj_subset _ _))).
+    pose (B_to_D0_1 := fun b => exist _ (principal_ideal _ R b) (D0_prin _)).
+    match eval hnf in
+      B_to_D0_T
+    with
+      ex ?P => assert (B_to_D0_spec: P B_to_D0_1)
+    end.
+    unfold B_to_D0_1.
     repeat split.
     intros a b [=ab].
     destruct order_R.
-    unfold principal_ideal in ab.
+    unfold principal_ideal in ab. 
     assert (abv: forall v, R⁻¹ a v = R⁻¹ b v).
       rewrite ab.
       reflexivity.
@@ -1012,13 +1024,15 @@ Section Definitions.
     destruct order_R; eapply ord_trans; eauto.
     compute; intros xab.
     apply xab; destruct order_R; auto.
-    destruct B_to_D0 as (B_to_D0 & B_to_D0_inj & B_to_D0_sur & B_to_D0_prsv).
-    intros D'.
+    destruct B_to_D0_spec as (B_to_D0_inj & B_to_D0_sur & B_to_D0_prsv).
+
+    (* D to D' in D' *)
     pose (D_to_D'_1 :=
       fun (d: _ | D d) =>
         proj1_sig (P := D0) ↓₁
           ⋃₁p ∈ (`d), set_equiv (principal_ideal _ R p)).
-    unshelve eassert (D_to_D' := fun d => exist D' (D_to_D'_1 d) _).
+    hnf.
+    match goal with |- @ex (_ -> sig ?P) _ => assert (D_to_D'_spec: forall d, P (D_to_D'_1 d)) end.
     destruct d as [s [Dsdown Dsjoin]].
     repeat split; simpl.
     intros [s' D0s'] (p & sp & s'pp) [sl [[s'' Ds''] [s''fin <-]]] sls'.
@@ -1098,6 +1112,172 @@ Section Definitions.
     destruct order_R; apply ord_refl.
     unfold B'; exists b; auto.
 
+    (* D to D' isomorphism *)
+    unshelve eexists.
+    intros d.
+    exists (D_to_D'_1 d).
+    apply D_to_D'_spec.
+    repeat split.
+    intros [a Da] [b Db] [=ab].
+    cut (a = b).
+    intros; subst.
+    f_equal; apply proof_irrelevance.
+    cut (a ≡₁ b).
+    intros ab'.
+    apply functional_extensionality;
+    intros x;
+    apply propositional_extensionality.
+    split; apply ab'.
+    (*
+    match goal with
+      |- ?A = ?B =>
+        set (a' := D_to_D'_1 A) in *;
+        set (b' := D_to_D'_1 B) in *;
+        set (D'a' := (D_to_D'_spec A));
+        set (D'b' := (D_to_D'_spec B))
+    end.
+    pose (aprin := ideal_join_principals _ _ B_fin_basis order_R _ Da).
+    pose (bprin := ideal_join_principals _ _ B_fin_basis order_R _ Db).
+    pose (a'prin := ideal_join_principals _ _ D0_fin_basis (order_proj_subset _ _) _ D'a').
+    pose (b'prin := ideal_join_principals _ _ D0_fin_basis (order_proj_subset _ _) _ D'b').
+    fold D in aprin, bprin.
+    fold D' in a'prin, b'prin.
+    simpl in *.
+    rewrite aprin.
+    rewrite bprin.
+    split; intros v.
+    intros [pa [[[[a'' Da''] [a''fin <-]] paa] pav]]; simpl in *.
+    apply fin_prin in a''fin as [a''p a''prin]; simpl in *.
+    *)
+    split; intros pa apa.
+    1,2: apply (f_equal (flip apply (B_to_D0_1 pa))) in ab.
+    1,2: unfold flip, apply, B_to_D0_1, D_to_D'_1, set_map, set_bunion in ab; simpl in ab.
+    match type of ab with ?A = _ => assert (ex_b: A) end.
+    3: match type of ab with _ = ?A => assert (ex_b: A) end.
+    1,3: exists pa; auto.
+    rewrite ab in ex_b.
+    2: rewrite <- ab in ex_b.
+    1,2: destruct ex_b as [pb [bpb pbpa]].
+    1,2: destruct (B_to_D0_inj pa pb); auto.
+    1,2: apply subset_eq; simpl.
+    1,2: apply functional_extensionality.
+    1,2: intros x.
+    1,2: apply propositional_extensionality.
+    1,2: split; apply pbpa.
+
+    intros [a' D'a'].
+    assert (Da: D (fun b => a' (B_to_D0_1 b))).
+      destruct D'a' as [D'a'down D'a'join].
+      split.
+      intros b a'b v rvb'.
+      eapply D'a'down; eauto.
+      intros x rxv; simpl in *.
+      destruct order_R; eapply ord_trans; eauto.
+      intros S' S'f' S'fin.
+      specialize (D'a'join (fun s => let (b, _) := cons_eps _ _ (B_to_D0_sur s) in S' b)).
+      destruct D'a'join as (b' & [[_ ubb'] b'min] & a'b').
+      intros s.
+      destruct (cons_eps _ _ (B_to_D0_sur s)).
+      intros S'x; apply S'f' in S'x.
+      subst; auto.
+      destruct S'fin as [S'list inS'list].
+      exists (map B_to_D0_1 S'list).
+      intros s.
+      destruct (cons_eps _ _ (B_to_D0_sur s)).
+      intros S'x; apply inS'list in S'x.
+      subst.
+      apply in_map; auto.
+      destruct (B_to_D0_sur b') as [b <-].
+      exists b; repeat split; auto.
+      intros v S'v.
+      specialize (ubb' (B_to_D0_1 v)).
+      destruct (cons_eps _ _ (B_to_D0_sur (B_to_D0_1 v))).
+      apply B_to_D0_inj in e; subst.
+      specialize (ubb' S'v).
+      hnf in ubb'; simpl in *.
+      apply ubb'.
+      destruct order_R; apply ord_refl.
+      intros v _ [_ ubv].
+      specialize (b'min (B_to_D0_1 v)).
+      apply b'min; simpl in *.
+      constructor.
+      split.
+      constructor.
+      intros s.
+      destruct (cons_eps _ _ (B_to_D0_sur s)).
+      subst.
+      intros S'x; apply ubv in S'x.
+      intros v' rvx; simpl in *.
+      destruct order_R; eapply ord_trans; eauto.
+      destruct order_R; apply ord_refl.
+    exists (exist _ _ Da).
+    apply subset_eq; simpl.
+    unfold D_to_D'_1; simpl.
+    apply functional_extensionality.
+    intros [pa D0pa].
+    apply propositional_extensionality.
+    split.
+    intros [pab [a'pab foo]].
+    simpl in *.
+    match goal with _: a' ?A |- a' ?B => assert (heq: A = B) end.
+    apply subset_eq; simpl.
+    apply functional_extensionality; intros x.
+    apply propositional_extensionality.
+    split; apply foo.
+    rewrite <- heq; auto.
+    intros a'pa.
+    hnf; simpl in *.
+    destruct (B_to_D0_sur (exist _ _ D0pa)) as [b beq].
+    change (fun s => D0 s) with D0 in *.
+    rewrite <- beq in a'pa.
+    exists b; split; auto.
+    apply subset_eq in beq; simpl in *.
+    subst; auto.
+    1,2: destruct a as [a Da], b as [b Db].
+    1,2: intros lab.
+    1,2: hnf in lab |- *; unfold D_to_D'_1 in lab |- *; simpl in *.
+    intros [x D0x] (b' & ab' & xpb'); hnf; simpl in *.
+    exists b'; split; auto.
+    intros x ax.
+    destruct (lab (B_to_D0_1 x)) as (b' & bb' & b'px'); destruct (B_to_D0_1 x) as [x' D0x'] eqn:xb.
+    exists x; split; auto; simpl.
+    apply subset_eq in xb; simpl in *.
+    subst; auto.
+    apply subset_eq in xb; simpl in *; subst x'.
+    destruct (B_to_D0_inj b' x).
+    apply subset_eq; simpl.
+    apply functional_extensionality.
+    intros x'.
+    apply propositional_extensionality.
+    split; apply b'px'.
+    auto.
+
+    (*
+    D to D' of S is the set of downward closures of elements in S.
+      proj1_sig (P:=D0) ↓₁ (⋃₁p ∈ `d, set_equiv (principal_ideal B R p))
+    injectivity:
+      D' of a = D' of b ->
+      {i: ∃p ∈ a, i = (<= p)} = {i: ∃p ∈ b, i = (<= p)} ->
+      ∀pa ∈ a, ∃pb ∈ b, (<= pa) = (<= pb) ->
+      ∀pa ∈ a, ∃pb ∈ b, pa = pb ->
+      ∀pa ∈ a, pa ∈ b ->
+      a = b
+    surjectivity:
+      D' a' ->
+      a' = {si: ∃i ∈ D0, i ∈ a' /\ si ⊆D0 i} -> (by joinprin)
+      ∀pa' ∈ a', ∃i, D0 i /\ i ∈ a' /\ pa' ⊆D0 i ->
+      ∀pa' ∈ a', ∃b, i := (<= b), i ∈ a' /\ pa' ⊆D0 i -> (B_to_D0_1, sur)
+      ∀pa' ∈ a', ∃b, (<= b) ∈ a' /\ pa' ⊆D0 (<= b) ->
+      ∀pa' ∈ a', ∃p b ∈ B, (<= b) ∈ a' /\ (<= p) ⊆D0 (<= b) /\ pa' = (<= p) ->
+      ∀pa' ∈ a', ∃p b ∈ B, (<= b) ∈ a' /\ p <= b /\ pa' = (<= p) ->
+      ∀pa' ∈ a', ∃p b ∈ B, b ∈ {b': (<= b') ∈ a'} /\ p <= b /\ pa' = (<= p) ->
+      ∀pa' ∈ a', ∃p ∈ {v: ∃b ∈ B, b ∈ {b': (<= b') ∈ a'} /\ v <= b}, pa' = (<= p) ->
+      {i: ∃p ∈ {v: ∃b ∈ B, b ∈ {b': (<= b') ∈ a'} /\ v <= b}, i = (<= p)} = a' -> 
+      a := {v: ∃b ∈ B, b ∈ {b': (<= b') ∈ a'} /\ v <= b}, {i: ∃p ∈ a, i = (<= p)} = a' -> 
+      ∃ a, D a /\ {i: ∃p ∈ a, i = (<= p)} = a' -> (by joinprin)
+      ∃ a, D a /\ D_to_D'_1 a = a' 
+    *)
+  Qed.
 
 Search order set_subset.
 
