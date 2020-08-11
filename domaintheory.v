@@ -801,22 +801,39 @@ Section Definitions.
   the approximation ordering ⊆ (restricted to D0). Moreover, the domain E determined by the finitary basis
   B' is isomorphic to D.
   *)
+
+  Lemma order_proj: forall A (R: relation A) (order_R: order _ R) P,
+    order {x: A | P x} (@proj1_sig _ _ ↓ R).
+  Proof.
+    clear R B B_fin_basis order_R D.
+    intros A R order_R P.
+    destruct order_R.
+    split.
+    intros [x Px]; compute; auto.
+    intros [x Px] [y Py] [z Pz] rxy ryz; compute; eauto.
+    intros [x Px] [y Py] rxy ryx; compute in rxy, ryx |- *.
+    apply subset_eq; simpl.
+    eauto.
+  Qed.
+
+  Lemma order_subset: forall A,
+    order (A -> Prop) set_subset.
+  Proof.
+    intros A.
+    split; auto with *.
+    intros a b ab ba.
+    apply functional_extensionality.
+    intros x.
+    apply propositional_extensionality.
+    split; auto.
+  Qed.
+
   Lemma order_proj_subset: forall A P,
     order {x: A -> Prop | P x} (@proj1_sig _ _ ↓ set_subset).
   Proof.
     intros A P.
-    unfold map_rel.
-    split; auto with *.
-    intros [a Pa] [b Pb] ab ba.
-    simpl in *.
-    assert (a = b).
-      apply functional_extensionality.
-      intros x.
-      apply propositional_extensionality.
-      split; auto.
-    subst b.
-    f_equal.
-    apply proof_irrelevance.
+    apply order_proj.
+    apply order_subset.
   Qed.
 
   Lemma domain_finite_domain:
@@ -1279,36 +1296,122 @@ Section Definitions.
     *)
   Qed.
 
-Search order set_subset.
+  (*
+  The preceding theorem justifies the following comprehensive definition for domains.
+  Definition 1.26: [Domain] A cpo D = (D, <=) is a domain iff
+    • D0 forms a finitary basis under the approximation ordering <= restricted to D0, and
+    • D is isomorphic to the domain E determined by D0
 
-Proof Since the finite elements of D are precisely the principal ideals, it is easy to see that B0
-is
-isomorphic to B. Hence, B0
-is a finitary basis and E is isomorphic to D. The isomorphism between
-D and E is given by the mapping δ : D → E is defined by the equation
-δ(d) = {e ∈ D0
-| e v d} .
-✷
-The preceding theorem justifies the following comprehensive definition for domains.
-Definition 1.26: [Domain] A cpo D = hD, vi is a domain iff
-• D0
-forms a finitary basis under the approximation ordering v restricted to D0
-, and
-• D is isomorphic to the domain E determined by D0
-.
-In other words, a domain is a partial order that is isomorphic to a constructed domain.
-To conclude this section, we state some closure properties on D to provide more intuition about
-the approximation ordering.
-Theorem 1.27: Let D the the domain determined by a finitary basis B. For any subset S of D,
-the following properties hold:
-1. T
-S ∈ D and T
-S = uS .
-2. if S is directed, then S
-S ∈ D and S
-S =
-F
-S .
+  In other words, a domain is a partial order that is isomorphic to a constructed domain.
+  *)
 
+  Definition domain (cpoB: cpo B R) := 
+    let B0 := {s: _ | el_finite _ _ cpoB s} in
+    exists B0_fin_basis: fin_basis B0 (@proj1_sig _ _ ↓ R),
+      isomorphic B R order_R
+                {s: _ | construct_domain _ _ B0_fin_basis s} _ (order_proj_subset _ _).
+End Definitions.
+
+Section Definitions.
+  Variable B: Type.
+  Variable R: relation B.
+  Variable B_fin_basis: fin_basis B R.
+  Variable order_R: order _ R.
+  Let D := construct_domain B R B_fin_basis.
+
+  Corollary domain_iso_constructed_domain:
+    forall cpoB,
+      domain B _ order_R cpoB <->
+      exists B' R' (order_R': order _ R') B'_fin_basis,
+        isomorphic B R order_R
+                   {s: _ | construct_domain B' R' B'_fin_basis s} _ (order_proj_subset _ _).
+  Proof.
+    pose (cons_eps := IndefiniteDescription.constructive_indefinite_description).
+    intros cpoB.
+    split.
+    intros [B0_fin_basis B_iso].
+    exists _, _, (order_proj _ R order_R _), B0_fin_basis.
+    auto.
+    intros (B' & R' & order_R' & B'_fin_basis & B'_iso).
+    red.
+
+    pose (principal_ideals_fin_basis _ _ B'_fin_basis order_R').
+    match goal with |- @ex ?G _  => assert G end.
+    destruct B_fin_basis as (Binhab & Bcount & Bclosed).
+    repeat split.
+    destruct (cons_eps _ _ (fin_basis_least _ _ B_fin_basis)) as [Bleast [_ Bleastmin]].
+    unshelve eexists; auto.
+    intros sBleast sinhab dirsBleast [[_ ubsBleast] lubsBleast].
+    destruct (classic (exists v, sBleast v)) as [[v sBleastv]|nv].
+    specialize (ubsBleast _ sBleastv).
+    specialize (Bleastmin v I).
+    assert (v = Bleast).
+    destruct order_R; eapply ord_antisym; eauto.
+    subst; auto.
+    contradict sinhab; intros v sBleastv; apply nv.
+    eexists; eauto.
+    destruct Bcount as [Bcount Bcountinj].
+    exists (Bcount ∘ (@proj1_sig _ _)).
+    intros [b bf] [b' b'f]; unfold compose; simpl.
+    intros counteq.
+    apply subset_eq; simpl.
+    auto.
+    intros S Sfin Scons.
+    edestruct (Bclosed (@proj1_sig _ _ ↑₁ S)) as [b [[_ ubb] lubb]].
+    destruct Sfin as [Slist inSlist].
+    exists (map (@proj1_sig _ _) Slist).
+    intros x ([x' x'f] & Sx & <-).
+    specialize (inSlist _ Sx).
+    apply in_map; auto.
+    destruct Scons as [b [_ ubb]].
+    exists (`b).
+    split.
+    constructor.
+    intros s ([s' s'f] & Ss & <-); simpl in *.
+    apply ubb in Ss; hnf in Ss; simpl in *.
+    auto.
+
+
+
+    edestruct dirsBleast; eauto.
+    exists (Bleast :: nil).
+    intros x sBleastx.
+    apply lubsBleast in 
+    apply ubsB
+
+    split.
+     unshelve eexists.
+    exists B'_fin_basis.
+  Qed.
+
+  Corollary domain_constructed_domain:
+    domain {s: _ | D s} _ (order_proj_subset _ _) (d_cpo _ _ B_fin_basis order_R).
+  Proof.
+    destruct (domain_finite_domain _ R B_fin_basis order_R) as [D0_fin_basis D_iso].
+    red.
+    fold D in D0_fin_basis, D_iso |- *.
+    exists D0_fin_basis.
+  Qed.
+
+  
+  let D0 := @proj1_sig _ _ ↑₁ el_finite _ _ (d_cpo B R B_fin_basis order_R) in
+  exists D0_fin_basis: fin_basis {s: _ | D0 s} (@proj1_sig _ _ ↓ set_subset),
+    let D' := (construct_domain _ _ D0_fin_basis) in
+    isomorphic {s: _ | D s} _ (order_proj_subset _ _)
+               {s: _ | D' s} _ (order_proj_subset _ _).
+
+  (*
+  To conclude this section, we state some closure properties on D to provide more intuition about
+  the approximation ordering.
+  Theorem 1.27: Let D the the domain determined by a finitary basis B. For any subset S of D,
+  the following properties hold:
+  1. T
+  S ∈ D and T
+  S = uS .
+  2. if S is directed, then S
+  S ∈ D and S
+  S =
+  F
+  S .
   *)
 End Definitions.
